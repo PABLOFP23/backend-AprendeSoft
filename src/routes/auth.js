@@ -1,25 +1,30 @@
 const express = require('express');
-const router = express.Router(); //servidor de express donde define rutas especificas
+const router = express.Router();
 const { register, login } = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
+const User = require('../models/User'); // ¡Faltaba esta importación!
 
-//registro de usuario
+// Registro de usuario
 router.post('/register', register);
 
-//login
+// Login
 router.post('/login', login);
 
-//ver pefil del usuario creado ver rol asingado
+// Ver perfil del usuario - CORREGIDO (tenía "user.findByPk" en lugar de "User.findByPk")
 router.get('/me', authMiddleware, async (req, res) => {
-
-    try {
-        const user = await user.findByPk(req.user.id, { //esta pasando la ruta y el rol que tiene el usuario login
-            attributes: ['id', 'username', 'role']
-        });
-    } catch (err) {
-         res.status(500).json({ error: err.message });
+  try {
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'username', 'role']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
     }
+
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
-

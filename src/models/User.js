@@ -1,4 +1,4 @@
- const { DataTypes } = require('sequelize');
+const { DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
 
 const User = sequelize.define('User', {
@@ -11,14 +11,11 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING,
     allowNull: false
   },
-
   role: {
-    type: DataTypes.ENUM('admin', 'teacher', 'student'), //roles disponibles
+    type: DataTypes.ENUM('administrador', 'profesor', 'estudiante'), // roles en español
     allowNull: false,
-    defaultValue: 'student' //para que todos por defecto sean estudiantes
-
+    defaultValue: 'estudiante' // por defecto estudiante
   }
 });
 
 module.exports = User;
-
