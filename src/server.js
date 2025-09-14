@@ -1,28 +1,145 @@
+// src/server.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const sequelize = require('./config/db');
+
+// Cargar variables de entorno
+dotenv.config();
+
+// Importar la conexión y modelos
+const { sequelize } = require('./models');
+
+// Importar rutas
 const authRoutes = require('./routes/auth');
 const protectedRoutes = require('./routes/protected');
 const courseRoutes = require('./routes/courses');
-
-dotenv.config();
+const asistenciaRoutes = require('./routes/asistencia');
 
 const app = express();
-app.use(cors()); //el backend “autoriza” al frontend comunicarse.
-app.use(express.json()); //Activa el middleware de Express que permite interpretar el cuerpo (body) de las peticiones en formato JSON.
 
+// Configuración de CORS
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
 
+// Middleware para parsear JSON
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
+// Logging en desarrollo
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+  });
+}
 
-app.use('/api/auth', authRoutes); //express monta todas las rutas.
-app.use('/api/protected', protectedRoutes);
-app.use('/api/courses', courseRoutes); //monta las rutas de donde esta el crear y listar profesores
+// ==================== RUTAS ====================
 
-//sequelize.sync({ force: true }).then(() => { //se usa para forzar lla creacion nuevamente de toda la base de datos, !!!!no usar en produccion
-sequelize.sync().then(() => {
-  console.log('Base de datos sincronizada');
-  const PORT = process.env.PORT || 4000;
-  app.listen(PORT, () => console.log(` Servidor corriendo en http://localhost:${PORT}`));
+// Ruta de prueba
+app.get('/', (req, res) => {
+  res.json({ 
+    message: '🎓 AprendeSoft API',
+    version: '1.0.0',
+    status: 'online',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: '/api/auth',
+      courses: '/api/courses',
+      asistencia: '/api/asistencia',
+      protected: '/api/protected'
+    }
+  });
 });
 
+// Montar rutas de la API
+app.use('/api/auth', authRoutes);
+app.use('/api/protected', protectedRoutes);
+app.use('/api/courses', courseRoutes);
+app.use('/api/asistencia', asistenciaRoutes);
+
+// Manejo de rutas no encontradas
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Ruta no encontrada',
+    path: req.path,
+    method: req.method
+  });
+});
+
+// Manejo de errores global
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(err.status || 500).json({
+    error: process.env.NODE_ENV === 'production' 
+      ? 'Error interno del servidor' 
+      : err.message,
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+  });
+});
+
+// ==================== INICIALIZACIÓN ====================
+
+const startServer = async () => {
+  try {
+    // Probar conexión a la base de datos
+    await sequelize.authenticate();
+    console.log('✅ Conexión a MySQL establecida correctamente');
+
+    // Sincronizar modelos con la base de datos
+    // NOTA: En producción usar migraciones
+    if (process.env.NODE_ENV !== 'production') {
+      await sequelize.sync({ alter: true });
+      console.log('✅ Base de datos sincronizada');
+      
+      // Crear usuario admin por defecto si no existe
+      const { User } = require('./models');
+      const bcrypt = require('bcryptjs');
+      
+      const adminExists = await User.findOne({
+        where: { username: 'admin' }
+      });
+
+      if (!adminExists) {
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        await User.create({
+          nombre: 'Administrador',
+          apellido: 'Sistema',
+          email: 'admin@aprendesoft.edu.co',
+          username: 'admin',
+          password: hashedPassword,
+          rol: 'admin'
+        });
+        console.log('✅ Usuario admin creado (usuario: admin, contraseña: admin123)');
+      }
+    }
+  // Iniciar servidor
+    const PORT = process.env.PORT || 4000;
+    app.listen(PORT, () => {
+      console.log(` Servidor corriendo en:                ║
+║     http://localhost:${PORT} `);
+    });
+
+      } catch (error) {
+    console.error(' Error al iniciar el servidor:', error);
+    process.exit(1);
+  }
+}; 
+
+
+// Iniciar aplicación
+startServer();
+
+// Manejo de cierre graceful
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM recibido. Cerrando servidor...');
+  await sequelize.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('\nSIGINT recibido. Cerrando servidor...');
+  await sequelize.close();
+  process.exit(0);
+});

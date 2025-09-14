@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { register, login } = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
-const User = require('../models/User'); // ¡Faltaba esta importación!
+const User = require('../models/User');
 
 // Registro de usuario
 router.post('/register', register);
@@ -10,7 +10,7 @@ router.post('/register', register);
 // Login
 router.post('/login', login);
 
-// Ver perfil del usuario - CORREGIDO (tenía "user.findByPk" en lugar de "User.findByPk")
+// Ver perfil del usuario
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {

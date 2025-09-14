@@ -1,0 +1,26 @@
+{
+    "folder-color.pathColors": [
+        {
+            "folderPath": "agenda-backend\\src\\routes\\auth.js\\",
+            "color": "foldercolorizer.color_000066"
+        },
+        {
+            "folderPath": "agenda-backend\\src\\routes\\",
+            "color": "foldercolorizer.color_00cc00"
+        },
+        {
+            "folderPath": "agenda-backend\\src\\routes\\courses.js\\"
+        },
+        {
+            "folderPath": "agenda-backend\\src\\controllers\\",
+            "color": "foldercolorizer.color_cc0000"
+        },
+        {
+            "folderPath": "agenda-backend\\src\\"
+        },
+        {
+            "folderPath": "agenda-backend\\src\\models\\",
+            "color": "foldercolorizer.color_cc0099"
+        }
+    ]
+}

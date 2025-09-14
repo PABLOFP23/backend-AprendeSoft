@@ -1,4 +1,4 @@
-// src/middleware/authorizeRoles.js
+// manejo de permisos dependiendo roles 
 function authorizeRoles(...allowedRoles) {
   return (req, res, next) => {
     if (!req.user || !allowedRoles.includes(req.user.role)) {
