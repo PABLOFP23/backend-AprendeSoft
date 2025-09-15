@@ -2,6 +2,7 @@
 const { Sequelize, DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
 const { FOREIGNKEYS } = require('sequelize/lib/query-types');
+
 //modelo usuario
 const User = sequelize.define('User', { 
     
@@ -102,7 +103,7 @@ capacidad: {
 
 //modelo matricula
 
-const Matricula = sequelize.define('Matricula', {
+const matricula = sequelize.define('Matricula', {
 id:{
     type: DataTypes.INTEGER,
     primaryKey: true,
@@ -121,7 +122,7 @@ tableName: 'matriculas',
 timestamps: false
 });
 
-// CREAR TAREA
+//TAREA
 
 const Tarea = sequelize.define('Tarea', {
 id: {
@@ -398,7 +399,7 @@ as: 'profesor'
 
 //matriculas (esrudiante-curso) mucho a muchos
 
-User.belongsToMany(Curso, {
+user.belongsToMany(Curso, {
 through: Matricula, 
 foreignKey: 'estudiante_id',
 otherKey: 'curso_id',

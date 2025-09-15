@@ -1,20 +1,28 @@
  const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { User } = require('../models/index');
 
 //registro de usuario
 
 exports.register = async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, rol } = req.body;
 
      const existingUser = await User.findOne({ where: { username } });
     if (existingUser) return res.status(400).json({ error: 'El usuario ya existe' });
 
     const hashed = await bcrypt.hash(password, 10); //password encryptada
 
-    const user = await User.create({ username, password: hashed, role: role || 'student'}); //crea el usuario y si no tiene rol definicido deja student predeterminado
-    res.json({ message: 'Usuario registrado', user: {id: user.id, username: user.username, role: user.role} //no devovlemos la password
+    const user = await User.create({ username, password: hashed, rol: rol || '  ',nombre: req.body.nombre || username,
+      email: req.body.email || `${username}@aprendesoft.edu.co`
+    });
+     //crea el usuario y si no tiene rol definicido deja estudiante predeterminado
+    res.json({ message: 'Usuario registrado', 
+      
+      user: {
+        id: user.id, 
+        username: user.username, 
+        rol: user.rol} //no devovlemos la password
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -35,13 +43,17 @@ exports.login = async (req, res) => {
 
 
 
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role}, process.env.JWT_SECRET, { expiresIn: '1h' }
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.rol}, 
+    process.env.JWT_SECRET, { expiresIn: '24h' } );// si todo esta correcto devuelve token
 
-    );// si todo esta correcto devuelve token
-    res.json({ message: 'Login exitoso', token,  
-    user: { id: user.id, username: user.username, role: user.role }}); // devuelve tambien rol para que el frontedn se comunique bien con el rol
+
+    res.json({ message: 'Login exitoso', 
+    token,
+    user: { 
+      id: user.id, 
+      username: user.username, 
+      role: user.rol }}); // devuelve tambien rol para que el frontedn se comunique bien con el rol
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-

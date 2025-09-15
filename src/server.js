@@ -85,35 +85,16 @@ const startServer = async () => {
   try {
     // Probar conexión a la base de datos
     await sequelize.authenticate();
-    console.log('✅ Conexión a MySQL establecida correctamente');
+    console.log('Conexión a MySQL establecida correctamente');
 
     // Sincronizar modelos con la base de datos
     // NOTA: En producción usar migraciones
     if (process.env.NODE_ENV !== 'production') {
       await sequelize.sync({ alter: true });
-      console.log('✅ Base de datos sincronizada');
-      
-      // Crear usuario admin por defecto si no existe
-      const { User } = require('./models');
-      const bcrypt = require('bcryptjs');
-      
-      const adminExists = await User.findOne({
-        where: { username: 'admin' }
-      });
+      console.log('base de datos sincronizada'); }
 
-      if (!adminExists) {
-        const hashedPassword = await bcrypt.hash('admin123', 10);
-        await User.create({
-          nombre: 'Administrador',
-          apellido: 'Sistema',
-          email: 'admin@aprendesoft.edu.co',
-          username: 'admin',
-          password: hashedPassword,
-          rol: 'admin'
-        });
-        console.log('✅ Usuario admin creado (usuario: admin, contraseña: admin123)');
-      }
-    }
+
+
   // Iniciar servidor
     const PORT = process.env.PORT || 4000;
     app.listen(PORT, () => {

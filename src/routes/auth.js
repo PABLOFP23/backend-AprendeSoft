@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { register, login } = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
-const User = require('../models/User');
+const { User } = require('../models/index');
 
 // Registro de usuario
 router.post('/register', register);
@@ -14,7 +14,7 @@ router.post('/login', login);
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'role']
+      attributes: ['id', 'username', 'nombre', 'apellido', 'email', 'rol']
     });
     
     if (!user) {
