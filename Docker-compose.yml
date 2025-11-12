@@ -1,0 +1,112 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_container
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      TZ: America/Bogota
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p${DB_PASSWORD} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - app_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile     
+    container_name: backend_container
+    working_dir: /app
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: ${PORT}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+      EMAIL_HOST: ${EMAIL_HOST}
+      EMAIL_PORT: ${EMAIL_PORT}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_FROM: ${EMAIL_FROM}
+      DEFAULT_FALTAS_NOTIFICACION: ${DEFAULT_FALTAS_NOTIFICACION}
+      DEFAULT_FALTAS_ALERTA: ${DEFAULT_FALTAS_ALERTA}
+      DEFAULT_PORCENTAJE_MINIMO: ${DEFAULT_PORCENTAJE_MINIMO}
+      TZ: America/Bogota
+      # mejora el watch de nodemon en contenedores/macOS
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "${PORT}:4000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+
+    # --- Perfil PRODUCCIÓN (default): sin volúmenes, arranca node ---
+    command: ["node","src/server.js"]
+    profiles: ["prod"]
+
+  backend-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend_dev
+    working_dir: /app
+    # usa shell para que no “salga” y se herede bien el proceso de nodemon
+    command: ["sh","-lc","npx --yes nodemon@^3 --legacy-watch src/server.js"]
+    tty: true                  # útil para que no se cierre el TTY en dev
+    stdin_open: true           # permite adjuntar entrada estándar (logs/adjuntar)
+    environment:
+      NODE_ENV: development
+      PORT: 4000               # dentro del contenedor seguimos en 4000
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      FRONTEND_URL: http://localhost:4001
+      EMAIL_HOST: ${EMAIL_HOST}
+      EMAIL_PORT: ${EMAIL_PORT}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      EMAIL_FROM: ${EMAIL_FROM}
+      DEFAULT_FALTAS_NOTIFICACION: ${DEFAULT_FALTAS_NOTIFICACION}
+      DEFAULT_FALTAS_ALERTA: ${DEFAULT_FALTAS_ALERTA}
+      DEFAULT_PORCENTAJE_MINIMO: ${DEFAULT_PORCENTAJE_MINIMO}
+      TZ: America/Bogota
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
+    ports:
+      - "4001:4000"            # host 4001 → contenedor 4000 (no choca con prod)
+    volumes:
+      - ./:/app                # monta tu código
+      - /app/node_modules      # preserva node_modules del contenedor
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+    profiles: ["dev"]
+
+
+volumes:
+  db_data:
+
+networks:
+  app_net:
