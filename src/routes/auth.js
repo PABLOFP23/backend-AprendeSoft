@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { register, login } = require('../controllers/authController');
+const { register, login, adminCreateUser } = require('../controllers/authController');
+const authorizeRoles = require('../middleware/roleMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
 const { User } = require('../models/index');
 
@@ -14,7 +15,21 @@ router.post('/login', login);
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'nombre', 'apellido', 'email', 'rol']
+      attributes: [
+        'id',
+        'username',
+        'nombre',
+        'segundo_nombre',
+        'apellido1',
+        'apellido2',
+        'email',
+        'rol',
+        'telefono',
+        'direccion',
+        'fecha_nacimiento',
+        'foto',
+        'activo'
+      ]
     });
     
     if (!user) {
@@ -26,5 +41,9 @@ router.get('/me', authMiddleware, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Crear usuario con rol (solo admin)
+router.post('/admin/usuarios', authMiddleware, authorizeRoles('admin'), adminCreateUser);
+
 
 module.exports = router;

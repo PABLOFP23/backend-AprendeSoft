@@ -9,13 +9,10 @@ dotenv.config();
 // Importar la conexión y modelos
 const { sequelize } = require('./models');
 
-// Importar rutas
-const authRoutes = require('./routes/auth');
-const protectedRoutes = require('./routes/protected');
-const courseRoutes = require('./routes/courses');
-const asistenciaRoutes = require('./routes/asistencia');
 
 const app = express();
+
+// ==================== MIDDLEWARES GLOBALES ====================
 
 // Configuración de CORS
 app.use(cors({
@@ -46,18 +43,15 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString(),
     endpoints: {
       auth: '/api/auth',
-      courses: '/api/courses',
+      cursos: '/api/cursos',       // 👈 corregido
       asistencia: '/api/asistencia',
       protected: '/api/protected'
     }
   });
 });
 
-// Montar rutas de la API
-app.use('/api/auth', authRoutes);
-app.use('/api/protected', protectedRoutes);
-app.use('/api/courses', courseRoutes);
-app.use('/api/asistencia', asistenciaRoutes);
+// Montar rutas de la API (ÍNDICE ÚNICO)
+app.use('/api', require('./routes')); // monta todo /api/* desde un único archivo
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {
@@ -87,27 +81,19 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log('Conexión a MySQL establecida correctamente');
 
-    // Sincronizar modelos con la base de datos
-    // NOTA: En producción usar migraciones
-    if (process.env.NODE_ENV !== 'production') {
-      await sequelize.sync({ alter: true });
-      console.log('base de datos sincronizada'); }
+    // 👉 Ya NO hacemos sync({ alter:true }) ni authenticate dos veces
 
-
-
-  // Iniciar servidor
     const PORT = process.env.PORT || 4000;
     app.listen(PORT, () => {
-      console.log(` Servidor corriendo en:                ║
+      console.log(` Servidor corriendo en:                
 ║     http://localhost:${PORT} `);
     });
 
-      } catch (error) {
+  } catch (error) {
     console.error(' Error al iniciar el servidor:', error);
     process.exit(1);
   }
 }; 
-
 
 // Iniciar aplicación
 startServer();
