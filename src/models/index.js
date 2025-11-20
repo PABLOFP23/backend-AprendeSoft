@@ -30,6 +30,9 @@ const User = sequelize.define('User', {
   updatedAt: 'updated_at'
 });
 
+
+
+
 /* ============================================================
    CURSOS
 ============================================================ */
@@ -57,14 +60,14 @@ const Materia = sequelize.define('Materia', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   nombre: { type: DataTypes.STRING(100), allowNull: false },
   codigo: { type: DataTypes.STRING(20), allowNull: false, unique: true },
-  curso_id: { type: DataTypes.INTEGER, allowNull: false }
+  curso_id: { type: DataTypes.INTEGER, allowNull: true },
+  profesor_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'usuarios', key: 'id' } }
 }, {
   tableName: 'materias',
   timestamps: true,
   createdAt: 'created_at',
   updatedAt: 'updated_at'
 });
-
 /* ============================================================
    INSCRIPCIONES A MATERIAS (N:M)
 ============================================================ */
