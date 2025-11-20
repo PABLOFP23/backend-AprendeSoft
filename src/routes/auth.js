@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { register, login, adminCreateUser } = require('../controllers/authController');
+const usersController = require('../controllers/usersController'); // <-- nuevo
 const authorizeRoles = require('../middleware/roleMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
 const { User } = require('../models/index');
@@ -45,5 +46,7 @@ router.get('/me', authMiddleware, async (req, res) => {
 // Crear usuario con rol (solo admin)
 router.post('/admin/usuarios', authMiddleware, authorizeRoles('admin'), adminCreateUser);
 
+// Listar usuarios (solo admin)
+router.get('/admin/usuarios', authMiddleware, authorizeRoles('admin'), usersController.listUsers);
 
 module.exports = router;

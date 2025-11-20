@@ -1,345 +1,253 @@
-// src/controllers/asistenciaController.js
-const { 
-  Asistencia, 
-  User, 
-  Curso, 
+const {
+  Asistencia,
+  User,
+  Curso,
   ConfigAsistencia,
   Notificacion,
   PadreEstudiante,
-  sequelize 
+  sequelize
 } = require('../models');
 const { Op } = require('sequelize');
+// Opcional: correo (si existe utils/mailer.js)
+let sendEmail = async () => {};
+try { ({ sendEmail } = require('../utils/mailer')); } catch (_) {}
 
-// Tomar asistencia para un curso
+const ESTADOS_VALIDOS = new Set(['presente','ausente','tardanza','justificado']);
+
+function nombreCompleto(u) {
+  return `${u.nombre} ${u.apellido1}${u.apellido2 ? ' ' + u.apellido2 : ''}`;
+}
+
+/* ===================== TOMAR ASISTENCIA ===================== */
 exports.tomarAsistencia = async (req, res) => {
-  const transaction = await sequelize.transaction();
-  
+  const tx = await sequelize.transaction();
   try {
     const { curso_id, fecha, asistencias } = req.body;
     const profesor_id = req.user.id;
 
-    // Verificar que el profesor imparte este curso
-    const curso = await Curso.findOne({
-      where: { 
-        id: curso_id,
-        profesor_id: profesor_id
-      }
-    });
-
-    if (!curso) {
-      await transaction.rollback();
-      return res.status(403).json({ 
-        error: 'No tienes permisos para tomar asistencia en este curso' 
-      });
+    if (!curso_id || !fecha || !Array.isArray(asistencias) || asistencias.length === 0) {
+      await tx.rollback();
+      return res.status(400).json({ error: 'curso_id, fecha y asistencias requeridos' });
     }
 
-    // Verificar si ya existe asistencia para esta fecha
-    const asistenciaExistente = await Asistencia.findOne({
-      where: {
-        curso_id,
-        fecha
-      }
-    });
-
-    if (asistenciaExistente) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        error: 'Ya existe un registro de asistencia para esta fecha' 
-      });
+    const curso = await Curso.findByPk(curso_id);
+    if (!curso) { await tx.rollback(); return res.status(404).json({ error: 'Curso no encontrado' }); }
+    if (req.user.rol !== 'admin' && curso.profesor_id !== profesor_id) {
+      await tx.rollback();
+      return res.status(403).json({ error: 'Sin permisos en este curso' });
     }
 
-    // Crear registros de asistencia para cada estudiante
-    const registrosAsistencia = [];
-    
-    for (const asist of asistencias) {
-      const registro = await Asistencia.create({
-        estudiante_id: asist.estudiante_id,
+    // ¿Ya se registró asistencia ese día? (si existe cualquier fila del curso/fecha)
+    const yaHay = await Asistencia.count({ where: { curso_id, fecha }, transaction: tx });
+    if (yaHay > 0) {
+      await tx.rollback();
+      return res.status(400).json({ error: 'Ya existe asistencia para curso y fecha' });
+    }
+
+    // Crear registros
+    const bulk = [];
+    for (const a of asistencias) {
+      if (!a.estudiante_id || !a.estado || !ESTADOS_VALIDOS.has(a.estado)) {
+        await tx.rollback();
+        return res.status(400).json({ error: 'Datos inválidos en asistencias' });
+      }
+      bulk.push({
+        estudiante_id: a.estudiante_id,
         curso_id,
         fecha,
-        estado: asist.estado,
-        hora_llegada: asist.hora_llegada || null,
-        observaciones: asist.observaciones || null,
+        estado: a.estado,
+        hora_llegada: a.hora_llegada || null,
+        observaciones: a.observaciones || null,
         registrado_por: profesor_id
-      }, { transaction });
-      
-      registrosAsistencia.push(registro);
+      });
+    }
+    await Asistencia.bulkCreate(bulk, { transaction: tx });
 
-      // Verificar si necesita notificación
-      await verificarYNotificarFaltas(asist.estudiante_id, curso_id, transaction);
+    // Notificaciones por faltas
+    for (const a of asistencias.filter(x => x.estado === 'ausente')) {
+      await verificarYNotificarFaltas(a.estudiante_id, curso_id, tx);
     }
 
-    await transaction.commit();
-
-    res.status(201).json({
-      message: 'Asistencia registrada exitosamente',
-      registros: registrosAsistencia.length
-    });
-
-  } catch (error) {
-    await transaction.rollback();
-    console.error('Error al tomar asistencia:', error);
-    res.status(500).json({ error: 'Error al registrar asistencia' });
+    await tx.commit();
+    return res.status(201).json({ message: 'Asistencia registrada', registros: bulk.length });
+  } catch (e) {
+    await tx.rollback();
+    console.error('tomarAsistencia:', e);
+    return res.status(500).json({ error: 'Error al tomar asistencia' });
   }
 };
 
-// Actualizar asistencia individual
+/* ===================== ACTUALIZAR ASISTENCIA ===================== */
 exports.actualizarAsistencia = async (req, res) => {
   try {
     const { id } = req.params;
     const { estado, observaciones, justificacion, archivo_justificacion } = req.body;
-
     const asistencia = await Asistencia.findByPk(id);
+    if (!asistencia) return res.status(404).json({ error: 'No encontrada' });
 
-    if (!asistencia) {
-      return res.status(404).json({ error: 'Registro de asistencia no encontrado' });
-    }
-
-    // Verificar permisos
     const curso = await Curso.findByPk(asistencia.curso_id);
-    if (curso.profesor_id !== req.user.id && req.user.rol !== 'admin') {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para modificar esta asistencia' 
-      });
-    }
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (req.user.rol !== 'admin' && curso.profesor_id !== req.user.id)
+      return res.status(403).json({ error: 'Sin permisos' });
+
+    if (estado && !ESTADOS_VALIDOS.has(estado))
+      return res.status(400).json({ error: 'Estado inválido' });
 
     await asistencia.update({
-      estado,
+      estado: estado || asistencia.estado,
       observaciones,
       justificacion,
       archivo_justificacion
     });
 
-    res.json({
-      message: 'Asistencia actualizada exitosamente',
-      asistencia
-    });
-
-  } catch (error) {
-    console.error('Error al actualizar asistencia:', error);
-    res.status(500).json({ error: 'Error al actualizar asistencia' });
+    return res.json({ message: 'Actualizada', asistencia });
+  } catch (e) {
+    console.error('actualizarAsistencia:', e);
+    return res.status(500).json({ error: 'Error al actualizar' });
   }
 };
 
-// Obtener asistencia de un curso por fecha
+/* ===================== OBTENER POR FECHA ===================== */
 exports.obtenerAsistenciaPorFecha = async (req, res) => {
   try {
     const { curso_id, fecha } = req.params;
-
-    const asistencias = await Asistencia.findAll({
-      where: {
-        curso_id,
-        fecha
-      },
-      include: [
-        {
-          model: User,
-          as: 'estudiante',
-          attributes: ['id', 'nombre', 'apellido', 'email']
-        }
-      ],
-      order: [['estudiante', 'apellido', 'ASC']]
+    const registros = await Asistencia.findAll({
+      where: { curso_id, fecha },
+      include: [{
+        model: User,
+        as: 'estudiante',
+        attributes: ['id','nombre','apellido1','apellido2','email']
+      }],
+      order: [[{ model: User, as: 'estudiante' }, 'apellido1', 'ASC'], [{ model: User, as: 'estudiante' }, 'nombre', 'ASC']]
     });
-
-    res.json(asistencias);
-
-  } catch (error) {
-    console.error('Error al obtener asistencia:', error);
-    res.status(500).json({ error: 'Error al obtener asistencia' });
+    return res.json(registros);
+  } catch (e) {
+    console.error('obtenerAsistenciaPorFecha:', e);
+    return res.status(500).json({ error: 'Error' });
   }
 };
 
-// Obtener historial de asistencia de un estudiante
+/* ===================== HISTORIAL ESTUDIANTE ===================== */
 exports.obtenerHistorialEstudiante = async (req, res) => {
   try {
     const { estudiante_id } = req.params;
     const { curso_id, fecha_inicio, fecha_fin } = req.query;
 
-    // Verificar permisos
-    const esPropio = req.user.id === parseInt(estudiante_id);
-    const esPadre = await verificarSiEsPadre(req.user.id, estudiante_id);
+    const esPropio = req.user.id === Number(estudiante_id);
+    const esPadre = await esPadreDe(req.user.id, estudiante_id);
     const esProfesor = req.user.rol === 'profesor';
     const esAdmin = req.user.rol === 'admin';
+    if (!esPropio && !esPadre && !esProfesor && !esAdmin)
+      return res.status(403).json({ error: 'Sin permisos' });
 
-    if (!esPropio && !esPadre && !esProfesor && !esAdmin) {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para ver este historial' 
-      });
-    }
+    const where = { estudiante_id };
+    if (curso_id) where.curso_id = curso_id;
+    if (fecha_inicio && fecha_fin) where.fecha = { [Op.between]: [fecha_inicio, fecha_fin] };
 
-    const whereClause = {
-      estudiante_id
-    };
-
-    if (curso_id) {
-      whereClause.curso_id = curso_id;
-    }
-
-    if (fecha_inicio && fecha_fin) {
-      whereClause.fecha = {
-        [Op.between]: [fecha_inicio, fecha_fin]
-      };
-    }
-
-    const asistencias = await Asistencia.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: Curso,
-          attributes: ['id', 'nombre', 'grado', 'seccion']
-        }
-      ],
-      order: [['fecha', 'DESC']]
+    const data = await Asistencia.findAll({
+      where,
+      include: [{ model: Curso, as: 'curso', attributes: ['id','nombre','grado','grupo'] }],
+      order: [['fecha','DESC']]
     });
 
-    // Calcular estadísticas
-    const estadisticas = {
-      total_clases: asistencias.length,
-      presentes: asistencias.filter(a => a.estado === 'presente').length,
-      ausentes: asistencias.filter(a => a.estado === 'ausente').length,
-      tardanzas: asistencias.filter(a => a.estado === 'tardanza').length,
-      justificados: asistencias.filter(a => a.estado === 'justificado').length
+    const stats = {
+      total_clases: data.length,
+      presentes: data.filter(x => x.estado === 'presente').length,
+      ausentes: data.filter(x => x.estado === 'ausente').length,
+      tardanzas: data.filter(x => x.estado === 'tardanza').length,
+      justificados: data.filter(x => x.estado === 'justificado').length
     };
-
-    estadisticas.porcentaje_asistencia = estadisticas.total_clases > 0
-      ? ((estadisticas.presentes + estadisticas.tardanzas) / estadisticas.total_clases * 100).toFixed(2)
+    stats.porcentaje_asistencia = stats.total_clases
+      ? ((stats.presentes + stats.tardanzas) / stats.total_clases * 100).toFixed(2)
       : 0;
 
-    res.json({
-      asistencias,
-      estadisticas
-    });
-
-  } catch (error) {
-    console.error('Error al obtener historial:', error);
-    res.status(500).json({ error: 'Error al obtener historial de asistencia' });
+    return res.json({ asistencias: data, estadisticas: stats });
+  } catch (e) {
+    console.error('obtenerHistorialEstudiante:', e);
+    return res.status(500).json({ error: 'Error' });
   }
 };
 
-// Obtener reporte de asistencia de un curso
+/* ===================== REPORTE CURSO ===================== */
 exports.obtenerReporteCurso = async (req, res) => {
   try {
     const { curso_id } = req.params;
-    const { mes, año } = req.query;
-
-    // Verificar permisos
+    const { mes, anio } = req.query;
     const curso = await Curso.findByPk(curso_id);
-    if (!curso) {
-      return res.status(404).json({ error: 'Curso no encontrado' });
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (req.user.rol !== 'admin' && curso.profesor_id !== req.user.id)
+      return res.status(403).json({ error: 'Sin permisos' });
+
+    let inicio, fin;
+    if (mes && anio) {
+      inicio = new Date(Number(anio), Number(mes) - 1, 1);
+      fin = new Date(Number(anio), Number(mes), 0);
+    } else {
+      const now = new Date();
+      inicio = new Date(now.getFullYear(), now.getMonth(), 1);
+      fin = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     }
 
-    if (curso.profesor_id !== req.user.id && req.user.rol !== 'admin') {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para ver este reporte' 
-      });
-    }
-
-    // Obtener estudiantes del curso
-    const estudiantes = await User.findAll({
-      include: [{
-        model: Curso,
-        as: 'cursos',
-        where: { id: curso_id },
-        through: { attributes: [] }
-      }],
-      attributes: ['id', 'nombre', 'apellido', 'email']
+    // Estudiantes del curso
+    const estudiantes = await curso.getEstudiantes({
+      attributes: ['id','nombre','apellido1','apellido2','email'],
+      joinTableAttributes: []
     });
 
-    // Preparar fechas para el reporte
-    let fechaInicio, fechaFin;
-    
-    if (mes && año) {
-      fechaInicio = new Date(año, mes - 1, 1);
-      fechaFin = new Date(año, mes, 0);
-    } else {
-      // Por defecto, mes actual
-      const ahora = new Date();
-      fechaInicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-      fechaFin = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0);
-    }
-
-    // Obtener asistencias del período
     const asistencias = await Asistencia.findAll({
       where: {
         curso_id,
-        fecha: {
-          [Op.between]: [fechaInicio, fechaFin]
-        }
+        fecha: { [Op.between]: [inicio, fin] }
       }
     });
 
-    // Crear reporte por estudiante
-    const reporte = estudiantes.map(estudiante => {
-      const asistenciasEstudiante = asistencias.filter(
-        a => a.estudiante_id === estudiante.id
-      );
-
-      const estadisticas = {
-        estudiante: {
-          id: estudiante.id,
-          nombre: `${estudiante.nombre} ${estudiante.apellido}`,
-          email: estudiante.email
-        },
-        total_clases: asistenciasEstudiante.length,
-        presentes: asistenciasEstudiante.filter(a => a.estado === 'presente').length,
-        ausentes: asistenciasEstudiante.filter(a => a.estado === 'ausente').length,
-        tardanzas: asistenciasEstudiante.filter(a => a.estado === 'tardanza').length,
-        justificados: asistenciasEstudiante.filter(a => a.estado === 'justificado').length
+    const reporte = estudiantes.map(e => {
+      const list = asistencias.filter(a => a.estudiante_id === e.id);
+      const total = list.length;
+      const presentes = list.filter(a => a.estado === 'presente').length;
+      const ausentes = list.filter(a => a.estado === 'ausente').length;
+      const tardanzas = list.filter(a => a.estado === 'tardanza').length;
+      const justificados = list.filter(a => a.estado === 'justificado').length;
+      const porcentaje = total ? ((presentes + tardanzas) / total * 100).toFixed(2) : 0;
+      return {
+        estudiante: { id: e.id, nombre: nombreCompleto(e), email: e.email },
+        total_clases: total,
+        presentes,
+        ausentes,
+        tardanzas,
+        justificados,
+        porcentaje_asistencia: porcentaje
       };
-
-      estadisticas.porcentaje_asistencia = estadisticas.total_clases > 0
-        ? ((estadisticas.presentes + estadisticas.tardanzas) / estadisticas.total_clases * 100).toFixed(2)
-        : 0;
-
-      // Verificar si cumple con el mínimo de asistencia
-      const config = curso.configuracionAsistencia;
-      estadisticas.cumple_minimo = estadisticas.porcentaje_asistencia >= 
-        (config?.porcentaje_minimo_asistencia || 75);
-
-      return estadisticas;
     });
 
-    res.json({
-      curso: {
-        id: curso.id,
-        nombre: curso.nombre,
-        grado: curso.grado,
-        seccion: curso.seccion
-      },
-      periodo: {
-        inicio: fechaInicio,
-        fin: fechaFin
-      },
+    const config = await ConfigAsistencia.findOne({ where: { curso_id } });
+    const minimo = config?.porcentaje_minimo_asistencia ?? Number(process.env.DEFAULT_PORCENTAJE_MINIMO || 75);
+
+    return res.json({
+      curso: { id: curso.id, nombre: curso.nombre, grado: curso.grado, grupo: curso.grupo },
+      periodo: { inicio, fin },
+      minimo_asistencia: minimo,
       reporte
     });
-
-  } catch (error) {
-    console.error('Error al generar reporte:', error);
-    res.status(500).json({ error: 'Error al generar reporte de asistencia' });
+  } catch (e) {
+    console.error('obtenerReporteCurso:', e);
+    return res.status(500).json({ error: 'Error' });
   }
 };
 
-// Justificar falta
+/* ===================== JUSTIFICAR FALTA ===================== */
 exports.justificarFalta = async (req, res) => {
   try {
     const { id } = req.params;
     const { justificacion, archivo_justificacion } = req.body;
-
     const asistencia = await Asistencia.findByPk(id);
+    if (!asistencia) return res.status(404).json({ error: 'No encontrada' });
 
-    if (!asistencia) {
-      return res.status(404).json({ error: 'Registro de asistencia no encontrado' });
-    }
-
-    // Verificar permisos (padre del estudiante o admin)
-    const esPadre = await verificarSiEsPadre(req.user.id, asistencia.estudiante_id);
+    const esPadre = await esPadreDe(req.user.id, asistencia.estudiante_id);
     const esAdmin = req.user.rol === 'admin';
     const esProfesor = req.user.rol === 'profesor';
-
-    if (!esPadre && !esAdmin && !esProfesor) {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para justificar esta falta' 
-      });
-    }
+    if (!esPadre && !esAdmin && !esProfesor)
+      return res.status(403).json({ error: 'Sin permisos' });
 
     await asistencia.update({
       estado: 'justificado',
@@ -347,208 +255,191 @@ exports.justificarFalta = async (req, res) => {
       archivo_justificacion
     });
 
-    res.json({
-      message: 'Falta justificada exitosamente',
-      asistencia
-    });
-
-  } catch (error) {
-    console.error('Error al justificar falta:', error);
-    res.status(500).json({ error: 'Error al justificar falta' });
+    return res.json({ message: 'Justificada', asistencia });
+  } catch (e) {
+    console.error('justificarFalta:', e);
+    return res.status(500).json({ error: 'Error' });
   }
 };
 
-// Configurar límites de asistencia para un curso
+exports.solicitarJustificacion = async (req, res) => {
+  try {
+    const estudiante_id = req.user.id;
+    const { curso_id, fecha, justificacion, archivo_justificacion } = req.body;
+    if (!curso_id || !fecha) {
+      return res.status(400).json({ error: 'curso_id y fecha son requeridos' });
+    }
+
+    // Buscar registro de asistencia existente para ese alumno/curso/fecha
+    const asistencia = await Asistencia.findOne({
+      where: { estudiante_id, curso_id, fecha }
+    });
+
+    if (!asistencia) {
+      // Si no existe, opcionalmente crear registro en estado 'ausente' con la solicitud
+      const nuevo = await Asistencia.create({
+        estudiante_id,
+        curso_id,
+        fecha,
+        estado: 'ausente',
+        justificacion: justificacion || null,
+        archivo_justificacion: archivo_justificacion || null,
+        registrado_por: estudiante_id
+      });
+      return res.status(201).json({ message: 'Solicitud creada', asistencia: nuevo });
+    }
+
+    await asistencia.update({
+      justificacion: justificacion || asistencia.justificacion,
+      archivo_justificacion: archivo_justificacion || asistencia.archivo_justificacion,
+      registrado_por: asistencia.registrado_por || estudiante_id
+    });
+
+    return res.json({ message: 'Solicitud enviada', asistencia });
+  } catch (e) {
+    console.error('solicitarJustificacion:', e);
+    return res.status(500).json({ error: 'Error al solicitar justificación' });
+  }
+};
+
+/* ===================== CONFIGURAR LÍMITES ===================== */
 exports.configurarLimites = async (req, res) => {
   try {
     const { curso_id } = req.params;
-    const {
-      limite_faltas_notificacion,
-      limite_faltas_alerta,
-      porcentaje_minimo_asistencia,
-      notificar_padres,
-      notificar_cada_falta
-    } = req.body;
+    const body = req.body;
+    if (!['admin','profesor'].includes(req.user.rol))
+      return res.status(403).json({ error: 'Sin permisos' });
 
-    // Verificar permisos
-    if (req.user.rol !== 'admin' && req.user.rol !== 'profesor') {
-      return res.status(403).json({ 
-        error: 'No tienes permisos para configurar límites' 
-      });
-    }
+    const curso = await Curso.findByPk(curso_id);
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (req.user.rol === 'profesor' && curso.profesor_id !== req.user.id)
+      return res.status(403).json({ error: 'No es tu curso' });
 
-    let config = await ConfigAsistencia.findOne({
-      where: { curso_id }
-    });
-
+    let config = await ConfigAsistencia.findOne({ where: { curso_id } });
     if (config) {
-      await config.update({
-        limite_faltas_notificacion,
-        limite_faltas_alerta,
-        porcentaje_minimo_asistencia,
-        notificar_padres,
-        notificar_cada_falta
-      });
+      await config.update(body);
     } else {
-      config = await ConfigAsistencia.create({
-        curso_id,
-        limite_faltas_notificacion,
-        limite_faltas_alerta,
-        porcentaje_minimo_asistencia,
-        notificar_padres,
-        notificar_cada_falta
-      });
+      config = await ConfigAsistencia.create({ curso_id, ...body });
     }
-
-    res.json({
-      message: 'Configuración actualizada exitosamente',
-      config
-    });
-
-  } catch (error) {
-    console.error('Error al configurar límites:', error);
-    res.status(500).json({ error: 'Error al configurar límites de asistencia' });
+    return res.json({ message: 'Configuración guardada', config });
+  } catch (e) {
+    console.error('configurarLimites:', e);
+    return res.status(500).json({ error: 'Error' });
   }
 };
 
-// ==================== FUNCIONES AUXILIARES ====================
-
-// Verificar si un usuario es padre de un estudiante
-async function verificarSiEsPadre(padreId, estudianteId) {
-  const relacion = await PadreEstudiante.findOne({
-    where: {
-      padre_id: padreId,
-      estudiante_id: estudianteId
-    }
-  });
-  return !!relacion;
-}
-
-// Verificar y notificar faltas
-async function verificarYNotificarFaltas(estudianteId, cursoId, transaction) {
+/* ===================== LLAMADO A LISTA ===================== */
+exports.llamadoLista = async (req, res) => {
   try {
-    // Obtener configuración del curso
-    const config = await ConfigAsistencia.findOne({
-      where: { curso_id: cursoId },
-      transaction
+    const { curso_id, fecha } = req.query;
+    if (!curso_id || !fecha) return res.status(400).json({ error: 'curso_id y fecha requeridos' });
+
+    const curso = await Curso.findByPk(curso_id);
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (req.user.rol !== 'admin' && curso.profesor_id !== req.user.id)
+      return res.status(403).json({ error: 'Sin permisos' });
+
+    const estudiantes = await curso.getEstudiantes({
+      attributes: ['id','nombre','apellido1','apellido2'],
+      joinTableAttributes: []
     });
 
-    if (!config || !config.notificar_padres) {
-      return;
-    }
-
-    // Contar faltas del estudiante en este curso
-    const faltas = await Asistencia.count({
-      where: {
-        estudiante_id: estudianteId,
-        curso_id: cursoId,
-        estado: 'ausente'
-      },
-      transaction
+    const registros = await Asistencia.findAll({
+      where: { curso_id, fecha },
+      attributes: ['id','estudiante_id','estado','hora_llegada','observaciones']
     });
+    const map = new Map(registros.map(r => [r.estudiante_id, r]));
 
-    // Obtener información del estudiante y curso
-    const estudiante = await User.findByPk(estudianteId, {
-      attributes: ['nombre', 'apellido'],
-      transaction
-    });
+    const roster = estudiantes
+      .sort((a,b) =>
+        (a.apellido1||'').localeCompare(b.apellido1||'') ||
+        (a.nombre||'').localeCompare(b.nombre||''))
+      .map(e => {
+        const reg = map.get(e.id);
+        return {
+          estudiante: { id: e.id, nombre: nombreCompleto(e) },
+            estado: reg?.estado || 'presente',
+            id_asistencia: reg?.id || null,
+            hora_llegada: reg?.hora_llegada || null,
+            observaciones: reg?.observaciones || null
+        };
+      });
 
-    const curso = await Curso.findByPk(cursoId, {
-      attributes: ['nombre', 'grado', 'seccion'],
-      transaction
-    });
-
-    // Verificar si se alcanzó el límite de notificación (3 faltas)
-    if (faltas === config.limite_faltas_notificacion) {
-      await crearNotificacionFaltas(
-        estudianteId,
-        curso,
-        estudiante,
-        faltas,
-        'notificacion',
-        transaction
-      );
-    }
-
-    // Verificar si se alcanzó el límite de alerta (5 faltas)
-    if (faltas === config.limite_faltas_alerta) {
-      await crearNotificacionFaltas(
-        estudianteId,
-        curso,
-        estudiante,
-        faltas,
-        'alerta',
-        transaction
-      );
-    }
-
-    // Si está configurado para notificar cada falta
-    if (config.notificar_cada_falta) {
-      await crearNotificacionFaltas(
-        estudianteId,
-        curso,
-        estudiante,
-        faltas,
-        'individual',
-        transaction
-      );
-    }
-
-  } catch (error) {
-    console.error('Error al verificar y notificar faltas:', error);
+    return res.json({ curso_id, fecha, roster });
+  } catch (e) {
+    console.error('llamadoLista:', e);
+    return res.status(500).json({ error: 'Error' });
   }
+};
+
+/* ===================== AUX ===================== */
+async function esPadreDe(padreId, estudianteId) {
+  const rel = await PadreEstudiante.findOne({
+    where: { padre_id: padreId, estudiante_id }
+  });
+  return !!rel;
 }
 
-// Crear notificación de faltas
-async function crearNotificacionFaltas(estudianteId, curso, estudiante, numeroFaltas, tipo, transaction) {
+async function verificarYNotificarFaltas(estudianteId, cursoId, tx) {
   try {
-    // Obtener padres del estudiante
-    const padres = await User.findAll({
-      include: [{
-        model: User,
-        as: 'hijos',
-        where: { id: estudianteId },
-        through: { attributes: [] }
-      }],
-      transaction
+    const config = await ConfigAsistencia.findOne({ where: { curso_id: cursoId }, transaction: tx });
+    if (!config || !config.notificar_padres) return;
+
+    const faltas = await Asistencia.count({
+      where: { estudiante_id: estudianteId, curso_id: cursoId, estado: 'ausente' },
+      transaction: tx
     });
 
-    const nombreEstudiante = `${estudiante.nombre} ${estudiante.apellido}`;
-    const nombreCurso = `${curso.grado}° ${curso.seccion} - ${curso.nombre}`;
+    const limiteNoti  = config.limite_faltas_notificacion ?? Number(process.env.DEFAULT_FALTAS_NOTIFICACION || 3);
+    const limiteAlerta= config.limite_faltas_alerta       ?? Number(process.env.DEFAULT_FALTAS_ALERTA || 5);
 
-    let titulo, mensaje, prioridad;
+    const disparar = config.notificar_cada_falta || faltas === limiteNoti || faltas === limiteAlerta;
+    if (!disparar) return;
 
-    switch (tipo) {
-      case 'notificacion':
-        titulo = `Notificación de Inasistencias - ${nombreEstudiante}`;
-        mensaje = `${nombreEstudiante} ha acumulado ${numeroFaltas} faltas en el curso ${nombreCurso}. Por favor, contacte con el profesor para mayor información.`;
-        prioridad = 'media';
-        break;
-      
-      case 'alerta':
-        titulo = `¡ALERTA! Límite de faltas alcanzado - ${nombreEstudiante}`;
-        mensaje = `${nombreEstudiante} ha alcanzado ${numeroFaltas} faltas en el curso ${nombreCurso}. Esta situación requiere atención inmediata. Por favor, contacte con la institución.`;
-        prioridad = 'urgente';
-        break;
-      
-      case 'individual':
-        titulo = `Nueva inasistencia registrada - ${nombreEstudiante}`;
-        mensaje = `${nombreEstudiante} no asistió hoy a la clase de ${nombreCurso}. Total de faltas acumuladas: ${numeroFaltas}.`;
-        prioridad = 'baja';
-        break;
+    const estudiante = await User.findByPk(estudianteId, { attributes: ['nombre','apellido1','apellido2'], transaction: tx });
+    const curso      = await Curso.findByPk(cursoId,      { attributes: ['nombre','grado','grupo'],        transaction: tx });
+
+    const padresRel = await PadreEstudiante.findAll({ where: { estudiante_id: estudianteId }, attributes: ['padre_id'], transaction: tx });
+    const padresIds = padresRel.map(r => r.padre_id);
+    if (padresIds.length === 0) return;
+
+    const padres = await User.findAll({ where: { id: padresIds }, attributes: ['id','email','nombre','apellido1','apellido2'], transaction: tx });
+
+    const nombreEst   = `${estudiante.nombre} ${estudiante.apellido1}${estudiante.apellido2 ? ' '+estudiante.apellido2 : ''}`;
+    const nombreCurso = `${curso.grado} ${curso.grupo} - ${curso.nombre}`;
+
+    let titulo, prioridad;
+    if (faltas === limiteAlerta) {
+      titulo = `ALERTA: ${nombreEst} alcanzó ${faltas} faltas`;
+      prioridad = 'urgente';
+    } else if (faltas === limiteNoti) {
+      titulo = `Notificación: ${nombreEst} acumula ${faltas} faltas`;
+      prioridad = 'media';
+    } else {
+      titulo = `Inasistencia - ${nombreEst}`;
+      prioridad = 'baja';
     }
+    const mensaje = `${nombreEst} acumula ${faltas} falta(s) en ${nombreCurso}.`;
 
-    // Crear notificación para cada padre
-    for (const padre of padres) {
+    for (const p of padres) {
       await Notificacion.create({
-        usuario_id: padre.id,
+        usuario_id: p.id,
         tipo: 'asistencia',
         titulo,
         mensaje,
         prioridad
-      }, { transaction });
+      }, { transaction: tx });
+
+      if (p.email) {
+        sendEmail(
+          p.email,
+          titulo,
+          `${mensaje}\n\nAviso automático.`,
+          `<p>${mensaje}</p><p>Aviso automático.</p>`
+        ).catch(err => console.error('sendEmail error:', err));
+      }
     }
-      } catch (error) {
-    console.error('Error al crear notificación de faltas:', error);
+  } catch (e) {
+    console.error('verificarYNotificarFaltas:', e);
   }
 }

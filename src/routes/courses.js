@@ -58,7 +58,7 @@ router.post('/', authMiddleware, authorizeRoles('profesor', 'admin'), async (req
   try {
     console.log('BODY CREAR CURSO:', req.body);
 
-    const { grado, grupo, capacidad } = req.body;
+    const { grado, grupo, capacidad, profesor_id } = req.body;
 
     if (!grado || !grupo) {
       return res.status(400).json({
@@ -85,14 +85,24 @@ router.post('/', authMiddleware, authorizeRoles('profesor', 'admin'), async (req
     const grupoStr = String(grupo);
     const nombre = formatearNombreCurso(grado, grupoStr);
 
+    // Determinar profesor asignado:
+    let assignedProfesorId = req.user.id;
+    if (req.user.rol === 'admin' && profesor_id) {
+      const prof = await User.findOne({ where: { id: profesor_id, rol: 'profesor' } });
+      if (!prof) {
+        return res.status(400).json({ error: 'Profesor inválido' });
+      }
+      assignedProfesorId = profesor_id;
+    }
+
     const curso = await Curso.create({
       nombre,
       grado,
-      grupo: grupoStr,        // AQUÍ seteamos la columna grupo del modelo/BD
+      grupo: grupoStr,
       capacidad: capacidad || 30,
-      profesor_id: req.user.id,
+      profesor_id: assignedProfesorId,
       año_lectivo: new Date().getFullYear()
-});
+    });
 
     res.json({ message: 'Curso creado exitosamente', curso });
   } catch (err) {
@@ -183,25 +193,27 @@ router.put('/:id', authMiddleware, authorizeRoles('profesor', 'admin'), async (r
       return res.status(404).json({ error: 'Curso no encontrado' });
     }
 
+    // permite editar si eres admin o el profesor asignado
     if (curso.profesor_id !== req.user.id && req.user.rol !== 'admin') {
       return res.status(403).json({ error: 'No tienes permisos para editar este curso' });
     }
 
-    const { grado, grupo, capacidad } = req.body;
+    const { grado, grupo, capacidad, profesor_id } = req.body;
 
     if (
       grado === undefined &&
       grupo === undefined &&
-      capacidad === undefined
+      capacidad === undefined &&
+      profesor_id === undefined
     ) {
       return res.status(400).json({ error: 'No se envió ningún campo para actualizar' });
     }
 
     const updates = {};
 
-    // usamos curso.seccion como el grupo actual
+    // mantener valores actuales si no se envían
     let nuevoGrado = curso.grado;
-    let nuevoGrupo = curso.seccion;
+    let nuevoGrupo = curso.grupo;
 
     if (grado !== undefined) {
       if (!GRADOS_VALIDOS.includes(grado)) {
@@ -223,6 +235,7 @@ router.put('/:id', authMiddleware, authorizeRoles('profesor', 'admin'), async (r
         });
       }
       nuevoGrupo = String(grupo);
+      updates.grupo = nuevoGrupo;
     }
 
     if (grado !== undefined || grupo !== undefined) {
@@ -231,6 +244,18 @@ router.put('/:id', authMiddleware, authorizeRoles('profesor', 'admin'), async (r
 
     if (capacidad !== undefined) {
       updates.capacidad = capacidad;
+    }
+
+    // Si admin quiere reasignar profesor
+    if (profesor_id !== undefined) {
+      if (req.user.rol !== 'admin') {
+        return res.status(403).json({ error: 'Solo admin puede reasignar profesor' });
+      }
+      const prof = await User.findOne({ where: { id: profesor_id, rol: 'profesor' } });
+      if (!prof) {
+        return res.status(400).json({ error: 'Profesor inválido' });
+      }
+      updates.profesor_id = profesor_id;
     }
 
     await curso.update(updates);
@@ -361,4 +386,3 @@ router.post('/unirse', authMiddleware, authorizeRoles('estudiante'), async (req,
 });
 
 module.exports = router;
-

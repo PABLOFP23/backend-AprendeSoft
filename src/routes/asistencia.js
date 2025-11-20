@@ -155,4 +155,16 @@ router.get(
   }
 );
 
+router.get(
+  '/llamado',
+  authorizeRoles('profesor','admin'),
+  asistenciaController.llamadoLista
+);
+
+router.post(
+  '/solicitar',
+  authorizeRoles('estudiante','padre'),
+  asistenciaController.solicitarJustificacion
+);
+
 module.exports = router;
