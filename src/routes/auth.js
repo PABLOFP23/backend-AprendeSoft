@@ -24,6 +24,7 @@ router.get('/me', authMiddleware, async (req, res) => {
         'apellido1',
         'apellido2',
         'email',
+        'numero_identificacion',
         'rol',
         'telefono',
         'direccion',
@@ -48,5 +49,8 @@ router.post('/admin/usuarios', authMiddleware, authorizeRoles('admin'), adminCre
 
 // Listar usuarios (solo admin)
 router.get('/admin/usuarios', authMiddleware, authorizeRoles('admin'), usersController.listUsers);
+
+router.put('/admin/usuarios/:id', authMiddleware, authorizeRoles('admin'), usersController.adminUpdateUser);
+
 
 module.exports = router;

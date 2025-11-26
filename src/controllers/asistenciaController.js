@@ -117,7 +117,13 @@ exports.obtenerAsistenciaPorFecha = async (req, res) => {
         model: User,
         as: 'estudiante',
         attributes: ['id','nombre','apellido1','apellido2','email']
-      }],
+      },
+        {
+          model: User,
+          as: 'registrador',
+          attributes: ['id','nombre','apellido1','rol','email']
+        }
+    ],
       order: [[{ model: User, as: 'estudiante' }, 'apellido1', 'ASC'], [{ model: User, as: 'estudiante' }, 'nombre', 'ASC']]
     });
     return res.json(registros);
@@ -146,7 +152,10 @@ exports.obtenerHistorialEstudiante = async (req, res) => {
 
     const data = await Asistencia.findAll({
       where,
-      include: [{ model: Curso, as: 'curso', attributes: ['id','nombre','grado','grupo'] }],
+      include: [{ model: Curso, as: 'curso', attributes: ['id','nombre','grado','grupo'] },
+      { model: User, as: 'registrador', attributes: ['id','nombre','apellido1','rol','email'] }
+
+    ],
       order: [['fecha','DESC']]
     });
 
@@ -264,35 +273,42 @@ exports.justificarFalta = async (req, res) => {
 
 exports.solicitarJustificacion = async (req, res) => {
   try {
-    const estudiante_id = req.user.id;
-    const { curso_id, fecha, justificacion, archivo_justificacion } = req.body;
-    if (!curso_id || !fecha) {
-      return res.status(400).json({ error: 'curso_id y fecha son requeridos' });
+    const actorId = req.user.id;
+    const actorRol = req.user.rol;
+    const { estudiante_id: bodyEstudianteId, curso_id, fecha, justificacion } = req.body;
+
+    if (!curso_id || !fecha) return res.status(400).json({ error: 'curso_id y fecha son requeridos' });
+
+    // decidir para qué estudiante se solicita la justificación
+    let targetEstudianteId;
+    if (actorRol === 'estudiante') {
+      targetEstudianteId = actorId;
+    } else if (actorRol === 'padre') {
+      if (!bodyEstudianteId) return res.status(400).json({ error: 'estudiante_id es requerido cuando quien solicita es padre' });
+      // validar vínculo padre->estudiante
+      const esPadre = await esPadreDe(actorId, Number(bodyEstudianteId));
+      if (!esPadre) return res.status(403).json({ error: 'No tienes permisos para justificar a ese estudiante' });
+      targetEstudianteId = Number(bodyEstudianteId);
+    } else if (actorRol === 'admin') {
+      // admin puede pasar estudiante_id
+      targetEstudianteId = bodyEstudianteId ? Number(bodyEstudianteId) : actorId;
+    } else {
+      return res.status(403).json({ error: 'Rol no permitido para solicitar justificación' });
     }
 
     // Buscar registro de asistencia existente para ese alumno/curso/fecha
     const asistencia = await Asistencia.findOne({
-      where: { estudiante_id, curso_id, fecha }
+      where: { estudiante_id: targetEstudianteId, curso_id, fecha }
     });
+    if (!asistencia) return res.status(404).json({ error: 'Registro de asistencia no encontrado para ese estudiante/curso/fecha' });
 
-    if (!asistencia) {
-      // Si no existe, opcionalmente crear registro en estado 'ausente' con la solicitud
-      const nuevo = await Asistencia.create({
-        estudiante_id,
-        curso_id,
-        fecha,
-        estado: 'ausente',
-        justificacion: justificacion || null,
-        archivo_justificacion: archivo_justificacion || null,
-        registrado_por: estudiante_id
-      });
-      return res.status(201).json({ message: 'Solicitud creada', asistencia: nuevo });
-    }
+    // si vino archivo por multer, construir ruta pública
+    const archivoFile = req.file ? `/uploads/asistencias/${req.file.filename}` : null;
 
     await asistencia.update({
       justificacion: justificacion || asistencia.justificacion,
-      archivo_justificacion: archivo_justificacion || asistencia.archivo_justificacion,
-      registrado_por: asistencia.registrado_por || estudiante_id
+      archivo_justificacion: archivoFile || asistencia.archivo_justificacion,
+      registrado_por: actorId
     });
 
     return res.json({ message: 'Solicitud enviada', asistencia });
@@ -375,7 +391,7 @@ exports.llamadoLista = async (req, res) => {
 /* ===================== AUX ===================== */
 async function esPadreDe(padreId, estudianteId) {
   const rel = await PadreEstudiante.findOne({
-    where: { padre_id: padreId, estudiante_id }
+    where: { padre_id: padreId, estudiante_id: estudianteId }
   });
   return !!rel;
 }

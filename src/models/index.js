@@ -147,6 +147,7 @@ const Evento = sequelize.define('Evento', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   titulo: { type: DataTypes.STRING(200), allowNull: false },
   descripcion: { type: DataTypes.TEXT, allowNull: true },
+  curso_id: { type: DataTypes.INTEGER, allowNull: true },
   fecha: { type: DataTypes.DATEONLY, allowNull: false },
   hora_inicio: { type: DataTypes.TIME, allowNull: true },
   hora_fin: { type: DataTypes.TIME, allowNull: true },
@@ -285,106 +286,229 @@ const Excusa = sequelize.define('Excusa', {
 const Notificacion = sequelize.define('Notificacion', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   usuario_id: { type: DataTypes.INTEGER, allowNull: false },
-  tipo: { type: DataTypes.STRING(50), allowNull: false },
-  titulo: { type: DataTypes.STRING(200), allowNull: false },
+  tipo: { type: DataTypes.STRING(40), allowNull: false },
+  titulo: { type: DataTypes.STRING(200), allowNull: true },
   mensaje: { type: DataTypes.TEXT, allowNull: true },
-  leida: { type: DataTypes.BOOLEAN, defaultValue: false },
-  fecha_leida: { type: DataTypes.DATE, allowNull: true },
-  prioridad: { type: DataTypes.ENUM('baja', 'media', 'alta', 'urgente'), defaultValue: 'media' }
+  leido: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  enviado_por: { type: DataTypes.INTEGER, allowNull: true },
+  estudiante_id: { type: DataTypes.INTEGER, allowNull: true },
+  fecha_citacion: { type: DataTypes.DATEONLY, allowNull: true },
+  hora_citacion: { type: DataTypes.TIME, allowNull: true },
+  location: { type: DataTypes.STRING(150), allowNull: true }
 }, {
   tableName: 'notificaciones',
   timestamps: true,
   createdAt: 'created_at',
-  updatedAt: false
+  updatedAt: 'updated_at'
 });
+
+/* ============================================================
+   HORARIO (clases / bloques del profesor)
+============================================================ */
+const Horario = sequelize.define('Horario', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  profesor_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'usuarios', key: 'id' } },
+  curso_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'cursos', key: 'id' } },
+  materia_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'materias', key: 'id' } },
+  dia: { type: DataTypes.STRING(20), allowNull: false }, 
+  hora_inicio: { type: DataTypes.STRING(10), allowNull: false }, 
+  hora_fin: { type: DataTypes.STRING(10), allowNull: false },    
+  aula: { type: DataTypes.STRING(50), allowNull: true },
+  sala: { type: DataTypes.STRING(50), allowNull: true }
+}, {
+  tableName: 'horarios',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at'
+});
+
+
 
 /* ============================================================
    RELACIONES
 ============================================================ */
-// Curso ↔ Profesor
-Curso.belongsTo(User, { foreignKey: 'profesor_id', as: 'profesor' });
-User.hasMany(Curso, { foreignKey: 'profesor_id', as: 'cursosDictados' });
 
-// Curso ↔ Estudiantes (matrícula)
+Asistencia.belongsTo(User, { as: 'registrador', foreignKey: 'registrado_por' });
 
 
-Curso.belongsToMany(User, { through: Matricula, as: 'estudiantes', foreignKey: 'curso_id', otherKey: 'estudiante_id' });
-User.belongsToMany(Curso, { through: Matricula, as: 'cursos', foreignKey: 'estudiante_id', otherKey: 'curso_id' });
+// Asociaciones (añadir al bloque de relaciones, con guardas)
+if (!Horario.associations || !Horario.associations.profesor) {
+  Horario.belongsTo(User, { as: 'profesor', foreignKey: 'profesor_id' });
+}
+if (!Horario.associations || !Horario.associations.curso) {
+  Horario.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+}
+if (!Horario.associations || !Horario.associations.materia) {
+  Horario.belongsTo(Materia, { as: 'materia', foreignKey: 'materia_id' });
+}
+
+
+if (!User.associations || !User.associations.cursosDictados) {
+  // Curso ↔ Profesor
+  Curso.belongsTo(User, { foreignKey: 'profesor_id', as: 'profesor' });
+  User.hasMany(Curso, { foreignKey: 'profesor_id', as: 'cursosDictados' });
+}
+
+// Curso ↔ Estudiantes (matrícula) - N:M a través de Matricula
+if (!Curso.associations || !Curso.associations.estudiantes) {
+  Curso.belongsToMany(User, { through: Matricula, as: 'estudiantes', foreignKey: 'curso_id', otherKey: 'estudiante_id' });
+}
+if (!User.associations || !User.associations.cursos) {
+  User.belongsToMany(Curso, { through: Matricula, as: 'cursos', foreignKey: 'estudiante_id', otherKey: 'curso_id' });
+}
+if (!Matricula.associations || !Matricula.associations.estudiante) {
+  Matricula.belongsTo(User, { as: 'estudiante', foreignKey: 'estudiante_id' });
+}
+if (!Matricula.associations || !Matricula.associations.curso) {
+  Matricula.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+}
 
 // Materia ↔ Curso
-Curso.hasMany(Materia, { foreignKey: 'curso_id', as: 'materias' });
-Materia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-
-// Materia ↔ Estudiantes (inscripciones a materias)
-Materia.belongsToMany(User, { through: InscripcionMateria, as: 'estudiantes', foreignKey: 'materia_id', otherKey: 'estudiante_id' });
-User.belongsToMany(Materia, { through: InscripcionMateria, as: 'materias', foreignKey: 'estudiante_id', otherKey: 'materia_id' });
-
-// Tareas ↔ Curso/Materia (alias únicos)
-Curso.hasMany(Tarea, { foreignKey: 'curso_id', as: 'tareasCurso' });
-Tarea.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-
-Materia.hasMany(Tarea, { foreignKey: 'materia_id', as: 'tareasMateria' });
-Tarea.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
-
-// Entregas de tareas
-Tarea.hasMany(TareaEstudiante, { foreignKey: 'tarea_id', as: 'entregas' });
-TareaEstudiante.belongsTo(Tarea, { foreignKey: 'tarea_id', as: 'tarea' });
-
-User.hasMany(TareaEstudiante, { foreignKey: 'estudiante_id', as: 'entregasTarea' });
-TareaEstudiante.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
-
-Curso.hasMany(TareaEstudiante, { foreignKey: 'curso_id', as: 'entregasCurso' });
-TareaEstudiante.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-
-Materia.hasMany(TareaEstudiante, { foreignKey: 'materia_id', as: 'entregasMateria' });
-TareaEstudiante.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
-
-// Asistencia
-Asistencia.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
-User.hasMany(Asistencia, { foreignKey: 'estudiante_id', as: 'asistencias' });
-
-Asistencia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-Curso.hasMany(Asistencia, { foreignKey: 'curso_id', as: 'asistencias' });
-
-Asistencia.belongsTo(User, { foreignKey: 'registrado_por', as: 'registrador' });
-
-// Padre ↔ Estudiante (User <-> User)
-User.belongsToMany(User, { through: PadreEstudiante, as: 'hijos', foreignKey: 'padre_id', otherKey: 'estudiante_id' });
-User.belongsToMany(User, { through: PadreEstudiante, as: 'padres', foreignKey: 'estudiante_id', otherKey: 'padre_id' });
-
-// ConfigAsistencia ↔ Curso
-Curso.hasOne(ConfigAsistencia, { foreignKey: 'curso_id', as: 'configuracionAsistencia' });
-ConfigAsistencia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-
-// Reportes
-ReporteEstudiante.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
-ReporteEstudiante.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-ReporteEstudiante.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
-
-User.hasMany(ReporteEstudiante, { foreignKey: 'estudiante_id', as: 'reportes' });
-Curso.hasMany(ReporteEstudiante, { foreignKey: 'curso_id', as: 'reportes' });
-Materia.hasMany(ReporteEstudiante, { foreignKey: 'materia_id', as: 'reportes' });
-
-ReporteCurso.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
-Curso.hasMany(ReporteCurso, { foreignKey: 'curso_id', as: 'reportesCurso' });
-
-ReporteCurso.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
-Materia.hasMany(ReporteCurso, { foreignKey: 'materia_id', as: 'reportesCurso' });
-
-// Notificaciones ↔ Usuario
-Notificacion.belongsTo(User, { foreignKey: 'usuario_id', as: 'usuario' });
-User.hasMany(Notificacion, { foreignKey: 'usuario_id', as: 'notificaciones' });
-
-if (!Materia.associations || !Materia.associations.curso) {
-  Materia.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+if (!Curso.associations || !Curso.associations.materias) {
+  Curso.hasMany(Materia, { foreignKey: 'curso_id', as: 'materias' });
 }
+if (!Materia.associations || !Materia.associations.curso) {
+  Materia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+
+// Materia ↔ Profesor
 if (!Materia.associations || !Materia.associations.profesor) {
   Materia.belongsTo(User, { as: 'profesor', foreignKey: 'profesor_id' });
 }
-if (!Curso.associations || !Curso.associations.materias) {
-  Curso.hasMany(Materia, { as: 'materias', foreignKey: 'curso_id' });
+
+// Materia ↔ Estudiantes (inscripciones a materias)
+if (!Materia.associations || !Materia.associations.estudiantes) {
+  Materia.belongsToMany(User, { through: InscripcionMateria, as: 'estudiantes', foreignKey: 'materia_id', otherKey: 'estudiante_id' });
+}
+if (!User.associations || !User.associations.materias) {
+  User.belongsToMany(Materia, { through: InscripcionMateria, as: 'materias', foreignKey: 'estudiante_id', otherKey: 'materia_id' });
 }
 
+// Tareas ↔ Curso/Materia
+if (!Curso.associations || !Curso.associations.tareasCurso) {
+  Curso.hasMany(Tarea, { foreignKey: 'curso_id', as: 'tareasCurso' });
+}
+if (!Tarea.associations || !Tarea.associations.curso) {
+  Tarea.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+if (!Materia.associations || !Materia.associations.tareasMateria) {
+  Materia.hasMany(Tarea, { foreignKey: 'materia_id', as: 'tareasMateria' });
+}
+if (!Tarea.associations || !Tarea.associations.materia) {
+  Tarea.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
+}
+
+// Entregas de tareas
+if (!Tarea.associations || !Tarea.associations.entregas) {
+  Tarea.hasMany(TareaEstudiante, { foreignKey: 'tarea_id', as: 'entregas' });
+}
+if (!TareaEstudiante.associations || !TareaEstudiante.associations.tarea) {
+  TareaEstudiante.belongsTo(Tarea, { foreignKey: 'tarea_id', as: 'tarea' });
+}
+if (!User.associations || !User.associations.entregasTarea) {
+  User.hasMany(TareaEstudiante, { foreignKey: 'estudiante_id', as: 'entregasTarea' });
+}
+if (!TareaEstudiante.associations || !TareaEstudiante.associations.estudiante) {
+  TareaEstudiante.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
+}
+if (!Curso.associations || !Curso.associations.entregasCurso) {
+  Curso.hasMany(TareaEstudiante, { foreignKey: 'curso_id', as: 'entregasCurso' });
+}
+if (!TareaEstudiante.associations || !TareaEstudiante.associations.curso) {
+  TareaEstudiante.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+if (!Materia.associations || !Materia.associations.entregasMateria) {
+  Materia.hasMany(TareaEstudiante, { foreignKey: 'materia_id', as: 'entregasMateria' });
+}
+if (!TareaEstudiante.associations || !TareaEstudiante.associations.materia) {
+  TareaEstudiante.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
+}
+
+// Asistencia
+if (!User.associations || !User.associations.asistencias) {
+  User.hasMany(Asistencia, { foreignKey: 'estudiante_id', as: 'asistencias' });
+}
+if (!Asistencia.associations || !Asistencia.associations.estudiante) {
+  Asistencia.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
+}
+if (!Curso.associations || !Curso.associations.asistencias) {
+  Curso.hasMany(Asistencia, { foreignKey: 'curso_id', as: 'asistencias' });
+}
+if (!Asistencia.associations || !Asistencia.associations.curso) {
+  Asistencia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+if (!Asistencia.associations || !Asistencia.associations.registrador) {
+  Asistencia.belongsTo(User, { foreignKey: 'registrado_por', as: 'registrador' });
+}
+
+// Padre ↔ Estudiante (User <-> User)
+if (!User.associations || !User.associations.hijos) {
+  User.belongsToMany(User, { through: PadreEstudiante, as: 'hijos', foreignKey: 'padre_id', otherKey: 'estudiante_id' });
+}
+if (!User.associations || !User.associations.padres) {
+  User.belongsToMany(User, { through: PadreEstudiante, as: 'padres', foreignKey: 'estudiante_id', otherKey: 'padre_id' });
+}
+
+// ConfigAsistencia ↔ Curso
+if (!Curso.associations || !Curso.associations.configuracionAsistencia) {
+  Curso.hasOne(ConfigAsistencia, { foreignKey: 'curso_id', as: 'configuracionAsistencia' });
+}
+if (!ConfigAsistencia.associations || !ConfigAsistencia.associations.curso) {
+  ConfigAsistencia.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+
+// Reportes
+if (!ReporteEstudiante.associations || !ReporteEstudiante.associations.estudiante) {
+  ReporteEstudiante.belongsTo(User, { foreignKey: 'estudiante_id', as: 'estudiante' });
+}
+if (!ReporteEstudiante.associations || !ReporteEstudiante.associations.curso) {
+  ReporteEstudiante.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+if (!ReporteEstudiante.associations || !ReporteEstudiante.associations.materia) {
+  ReporteEstudiante.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
+}
+if (!User.associations || !User.associations.reportes) {
+  User.hasMany(ReporteEstudiante, { foreignKey: 'estudiante_id', as: 'reportes' });
+}
+if (!Curso.associations || !Curso.associations.reportes) {
+  Curso.hasMany(ReporteEstudiante, { foreignKey: 'curso_id', as: 'reportes' });
+}
+if (!Materia.associations || !Materia.associations.reportes) {
+  Materia.hasMany(ReporteEstudiante, { foreignKey: 'materia_id', as: 'reportes' });
+}
+
+if (!ReporteCurso.associations || !ReporteCurso.associations.curso) {
+  ReporteCurso.belongsTo(Curso, { foreignKey: 'curso_id', as: 'curso' });
+}
+if (!Curso.associations || !Curso.associations.reportsCurso) {
+  Curso.hasMany(ReporteCurso, { foreignKey: 'curso_id', as: 'reportesCurso' });
+}
+if (!ReporteCurso.associations || !ReporteCurso.associations.materia) {
+  ReporteCurso.belongsTo(Materia, { foreignKey: 'materia_id', as: 'materia' });
+}
+if (!Materia.associations || !Materia.associations.reportsCurso) {
+  Materia.hasMany(ReporteCurso, { foreignKey: 'materia_id', as: 'reportesCurso' });
+}
+
+// Notificaciones
+if (!Notificacion.associations || !Notificacion.associations.usuario) {
+  Notificacion.belongsTo(User, { foreignKey: 'usuario_id', as: 'usuario' });
+}
+if (!User.associations || !User.associations.notificaciones) {
+  User.hasMany(Notificacion, { foreignKey: 'usuario_id', as: 'notificaciones' });
+}
+
+Notificacion.belongsTo(User, { as: 'remitente', foreignKey: 'enviado_por' });
+
+Evento.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+
+// Evitar redefinir asociaciones duplicadas: comprobación final (opcional)
+Object.freeze(User.associations);
+Object.freeze(Curso.associations);
+Object.freeze(Materia.associations);
+Object.freeze(Matricula.associations);
+Object.freeze(Tarea.associations);
+Object.freeze(TareaEstudiante.associations);
 
 /* ============================================================
    EXPORTS
@@ -408,5 +532,6 @@ module.exports = {
   ReporteCurso,
   Excusa,
   PadreEstudiante,
-  Notificacion
+  Notificacion,
+  Horario
 };

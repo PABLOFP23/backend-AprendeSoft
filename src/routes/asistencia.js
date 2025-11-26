@@ -3,6 +3,24 @@ const router = express.Router();
 const asistenciaController = require('../controllers/asistenciaController');
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
+const multer = require('multer');
+const path = require('path');
+// storage para justificantes de asistencia
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dest = path.join(__dirname, '..', '..', 'uploads', 'asistencias');
+    try { const fs = require('fs'); if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true }); cb(null, dest); } catch (err) { cb(err); }
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2,8)}${ext}`;
+    cb(null, name);
+  }
+});
+const upload = multer({ storage });
+
+
+
 
 // Todas las rutas requieren autenticación
 router.use(authMiddleware);
@@ -164,6 +182,7 @@ router.get(
 router.post(
   '/solicitar',
   authorizeRoles('estudiante','padre'),
+  upload.single('archivo_justificacion'),
   asistenciaController.solicitarJustificacion
 );
 

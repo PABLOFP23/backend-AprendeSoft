@@ -9,13 +9,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const { User, InvitacionPadre, PadreEstudiante } = require('../models');
 
-/**
- * Crear invitación para un padre
- * Solo admin o profesor (idealmente director de curso, eso se puede refinar luego)
- *
- * POST /api/padres/invitaciones
- * Body: { estudiante_id, email_padre, fecha_expiracion? }
- */
+
 router.post('/invitaciones', authMiddleware, authorizeRoles('admin', 'profesor'), async (req, res) => {
   try {
     const { estudiante_id, email_padre, fecha_expiracion } = req.body;
@@ -60,24 +54,40 @@ router.post('/invitaciones', authMiddleware, authorizeRoles('admin', 'profesor')
   }
 });
 
+router.post('/asignar', authMiddleware, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const { padre_id, estudiante_id, estudiante_numero_identificacion } = req.body;
+    if (!padre_id) return res.status(400).json({ error: 'padre_id es requerido' });
 
-/**
- * Aceptar invitación de padre (registro de padre + vínculo con estudiante)
- * Ruta PÚBLICA (no requiere token, viene con código)
- *
- * POST /api/padres/aceptar
- * Body: {
- *   codigo,
- *   nombre,
- *   segundo_nombre?,
- *   apellido1,
- *   apellido2?,
- *   telefono?,
- *   direccion?,
- *   password
- * }
- * El email se toma de la invitación (email_padre)
- */
+    // buscar padre
+    const padre = await User.findOne({ where: { id: Number(padre_id), rol: 'padre' } });
+    if (!padre) return res.status(404).json({ error: 'Usuario padre no encontrado o no es rol padre' });
+
+    // buscar estudiante por id o por numero_identificacion
+    let estudiante = null;
+    if (estudiante_id) {
+      estudiante = await User.findOne({ where: { id: Number(estudiante_id), rol: 'estudiante' } });
+    } else if (estudiante_numero_identificacion) {
+      estudiante = await User.findOne({ where: { numero_identificacion: String(estudiante_numero_identificacion).trim(), rol: 'estudiante' } });
+    } else {
+      return res.status(400).json({ error: 'estudiante_id o estudiante_numero_identificacion requerido' });
+    }
+
+    if (!estudiante) return res.status(404).json({ error: 'Estudiante no encontrado' });
+
+    // crear relación si no existe
+    const [rel, created] = await PadreEstudiante.findOrCreate({
+      where: { padre_id: padre.id, estudiante_id: estudiante.id },
+      defaults: { parentesco: 'Padre/Madre' }
+    });
+
+    return res.json({ message: created ? 'Asignación creada' : 'Relación ya existente', relacion: rel });
+  } catch (err) {
+    console.error('padres.asignar error:', err);
+    return res.status(500).json({ error: 'Error asignando estudiante al padre' });
+  }
+});
+
 router.post('/aceptar', async (req, res) => {
   try {
     const {

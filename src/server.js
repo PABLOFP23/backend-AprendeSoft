@@ -3,10 +3,25 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 dotenv.config();
 const { sequelize } = require('./models');
+const path = require('path');
+const fs = require('fs');
+
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+const tareasDir = path.join(uploadsDir, 'tareas');
+try {
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+  if (!fs.existsSync(tareasDir)) fs.mkdirSync(tareasDir, { recursive: true });
+} catch (err) {
+  console.error('No se pudo crear carpeta uploads:', err);
+}
+
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
 
 // CORS desarrollo: refleja cualquier origin y permite credenciales
 app.use(cors({
@@ -35,7 +50,10 @@ app.use('/api/reportes', require('./routes/reportesRoutes'));
 app.use('/api/tareas', require('./routes/tareasRoutes'));
 app.use('/api/horario', require('./routes/horario'));
 app.use('/api/materias', require('./routes/materias'));
-
+app.use('/api/matriculas', require('./routes/matriculas'))
+app.use('/api/citaciones', require('./routes/citaciones'))
+app.use('/api/comunicaciones', require('./routes/comunicaciones'));
+app.use('/api/eventos', require('./routes/eventos'));
 
 app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada', path: req.path }));
 
@@ -43,6 +61,8 @@ app.use((err, _req, res, _next) => {
   console.error('Error:', err);
   res.status(err.status || 500).json({ error: err.message });
 });
+
+
 
 const PORT = process.env.PORT || 4001;
 sequelize.authenticate()

@@ -140,7 +140,7 @@ router.get('/', authMiddleware, async (req, res) => {
 // Obtener un curso específico
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
-    const curso = await Curso.findByPk(req.params.id, {
+ const curso = await Curso.findByPk(req.params.id, {
       include: [
         {
           model: User,
@@ -158,16 +158,17 @@ router.get('/:id', authMiddleware, async (req, res) => {
         {
           model: User,
           as: 'estudiantes',
-          attributes: [
+         attributes: [
             'id',
             'username',
             'nombre',
             'segundo_nombre',
             'apellido1',
             'apellido2',
-            'email'
+            'email',
+            'numero_identificacion' 
           ],
-          through: { attributes: [] }
+          through: { attributes: [], where: { estado: 'activo' } }
         }
       ]
     });
@@ -288,58 +289,101 @@ router.delete('/:id', authMiddleware, authorizeRoles('profesor', 'admin'), async
 });
 
 // Matricular estudiante en curso - solo admin
-router.post('/:id/matricular', authMiddleware, authorizeRoles('admin'), async (req, res) => {
+router.post('/:id/matricular', authMiddleware, authorizeRoles('admin','profesor'), async (req, res) => {
   try {
-    const { estudiante_id } = req.body;
-    const curso_id = req.params.id;
+    const curso_id = Number(req.params.id);
+    const { estudiante_id, numero_identificacion } = req.body;
 
     const curso = await Curso.findByPk(curso_id);
-    if (!curso) {
-      return res.status(404).json({ error: 'Curso no encontrado' });
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+
+    // Buscar estudiante por numero_identificacion o por id
+    let estudiante = null;
+    if (numero_identificacion) {
+      const nid = String(numero_identificacion).trim();
+      estudiante = await User.findOne({ where: { numero_identificacion: nid, rol: 'estudiante' } });
+    } else if (estudiante_id) {
+      estudiante = await User.findOne({ where: { id: estudiante_id, rol: 'estudiante' } });
+    } else {
+      return res.status(400).json({ error: 'Se requiere estudiante_id o numero_identificacion' });
     }
 
-    const estudiante = await User.findOne({
-      where: { 
-        id: estudiante_id,
-        rol: 'estudiante'
-      }
+    if (!estudiante) return res.status(404).json({ error: 'Estudiante no encontrado' });
+
+    // ----- VALIDACIÓN: evitar más de una matrícula ACTIVA por estudiante -----
+    const matriculaActiva = await Matricula.findOne({
+      where: { estudiante_id: estudiante.id, estado: 'activo' }
     });
 
-    if (!estudiante) {
-      return res.status(404).json({ error: 'Estudiante no encontrado' });
+    if (matriculaActiva && Number(matriculaActiva.curso_id) !== curso_id) {
+      return res.status(400).json({ error: 'El estudiante ya está matriculado en otro curso (desmatricule primero o use la opción de mover)' });
     }
 
-    const matriculasActuales = await Matricula.count({
-      where: { 
-        curso_id,
-        estado: 'activo'
-      }
-    });
-
+    // control de capacidad
+    const matriculasActuales = await Matricula.count({ where: { curso_id, estado: 'activo' } });
     if (matriculasActuales >= curso.capacidad) {
       return res.status(400).json({ error: 'El curso ha alcanzado su capacidad máxima' });
     }
 
-    const matricula = await Matricula.create({
-      estudiante_id,
-      curso_id,
-      fecha_matricula: new Date(),
-      estado: 'activo'
+    // Crear o reactivar matrícula: si existe inactiva la reactiva; si no existe la crea
+    const [matricula, created] = await Matricula.findOrCreate({
+      where: { curso_id, estudiante_id: estudiante.id },
+      defaults: {
+        fecha_matricula: new Date(),
+        estado: 'activo'
+      }
     });
 
-    res.json({ 
-      message: 'Estudiante matriculado exitosamente',
-      matricula 
-    });
-
-  } catch (err) {
-    if (err.name === 'SequelizeUniqueConstraintError') {
-      return res.status(400).json({ error: 'El estudiante ya está matriculado en este curso' });
+    if (!created && matricula.estado === 'inactivo') {
+      await matricula.update({ estado: 'activo', fecha_matricula: new Date() });
     }
+
+    return res.json({
+      message: created ? 'Estudiante matriculado exitosamente' : (matricula.estado === 'activo' ? 'Estudiante ya estaba matriculado' : 'Matrícula reactivada'),
+      matricula
+    });
+  } catch (err) {
+    console.error('matricular error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
+router.post('/:id/desmatricular', authMiddleware, authorizeRoles('admin','profesor'), async (req, res) => {
+  try {
+    const curso_id = Number(req.params.id);
+    const { estudiante_id, numero_identificacion } = req.body;
+
+    const curso = await Curso.findByPk(curso_id);
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+
+    // buscar estudiante por número o id
+    let estudiante = null;
+    if (numero_identificacion) {
+      const nid = String(numero_identificacion).trim();
+      estudiante = await User.findOne({ where: { numero_identificacion: nid, rol: 'estudiante' } });
+    } else if (estudiante_id) {
+      estudiante = await User.findOne({ where: { id: estudiante_id, rol: 'estudiante' } });
+    } else {
+      return res.status(400).json({ error: 'Se requiere estudiante_id o numero_identificacion' });
+    }
+
+    if (!estudiante) return res.status(404).json({ error: 'Estudiante no encontrado' });
+
+    const matricula = await Matricula.findOne({
+      where: { curso_id, estudiante_id: estudiante.id, estado: 'activo' }
+    });
+
+    if (!matricula) return res.status(404).json({ error: 'Matrícula activa no encontrada para este estudiante en el curso' });
+
+    // marcar como inactivo (no borrar para historial)
+    await matricula.update({ estado: 'inactivo' });
+
+    return res.json({ message: 'Estudiante desmatriculado correctamente', matricula });
+  } catch (err) {
+    console.error('desmatricular error:', err);
+    return res.status(500).json({ error: 'Error al desmatricular estudiante' });
+  }
+});
 // Generar/renovar código para un curso (profesor/admin)
 router.post('/:id/generar-codigo', authMiddleware, authorizeRoles('profesor', 'admin'), async (req, res) => {
   try {
