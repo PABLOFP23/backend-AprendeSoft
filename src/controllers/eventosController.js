@@ -8,8 +8,9 @@ async function cursosDelProfesor(profesorId) {
 
 exports.listar = async (req, res) => {
   try {
-    const { curso_id, desde, hasta, tipo } = req.query;
+    const { curso_id, desde, hasta, tipo, incluir_cancelados } = req.query;
     const where = {};
+    if (!incluir_cancelados) where.estado = 'activo';
     if (tipo) where.tipo = tipo;
     if (desde || hasta) where.fecha = { ...(desde ? { [Op.gte]: desde } : {}), ...(hasta ? { [Op.lte]: hasta } : {}) };
 
@@ -41,6 +42,27 @@ exports.listar = async (req, res) => {
   } catch (e) {
     console.error('eventos.listar', e);
     res.status(500).json({ error: 'Error al listar eventos' });
+  }
+};
+
+exports.cancelar = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const ev = await Evento.findByPk(id);
+    if (!ev) return res.status(404).json({ error: 'Evento no encontrado' });
+
+    // permisos: admin cualquier; profesor solo si es de su curso (no generales)
+    if (req.user.rol === 'profesor') {
+      if (!ev.curso_id) return res.status(403).json({ error: 'Solo admin puede cancelar eventos generales' });
+      const c = await Curso.findByPk(ev.curso_id);
+      if (!c || c.profesor_id !== req.user.id) return res.status(403).json({ error: 'Sin permisos sobre el evento' });
+    }
+
+    await ev.update({ estado: 'cancelado' });
+    return res.json({ message: 'Evento cancelado', evento: ev });
+  } catch (e) {
+    console.error('eventos.cancelar', e);
+    res.status(500).json({ error: 'Error al cancelar evento' });
   }
 };
 
