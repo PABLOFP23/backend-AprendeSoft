@@ -132,7 +132,10 @@ const TareaEstudiante = sequelize.define('TareaEstudiante', {
   curso_id: { type: DataTypes.INTEGER, allowNull: false },
   materia_id: { type: DataTypes.INTEGER, allowNull: true },
   imagen_ruta: { type: DataTypes.STRING(255), allowNull: true },
-  archivo_ruta: { type: DataTypes.STRING(255), allowNull: true }
+  archivo_ruta: { type: DataTypes.STRING(255), allowNull: true },
+  comentario: { type: DataTypes.TEXT, allowNull: true },           
+  nota: { type: DataTypes.DECIMAL(5,2), allowNull: true },          
+  comentario_profesor: { type: DataTypes.TEXT, allowNull: true }    
 }, {
   tableName: 'tareas_estudiantes',
   timestamps: true,
@@ -186,7 +189,9 @@ const Asistencia = sequelize.define('Asistencia', {
   observaciones: { type: DataTypes.TEXT, allowNull: true },
   justificacion: { type: DataTypes.TEXT, allowNull: true },
   archivo_justificacion: { type: DataTypes.STRING(255), allowNull: true },
-  registrado_por: { type: DataTypes.INTEGER, allowNull: true }
+  registrado_por: { type: DataTypes.INTEGER, allowNull: true },
+    materia_id: { type: DataTypes.INTEGER, allowNull: true }
+
 }, {
   tableName: 'asistencias',
   timestamps: true,
@@ -199,10 +204,21 @@ const PadreEstudiante = sequelize.define('PadreEstudiante', {
   padre_id: { type: DataTypes.INTEGER, allowNull: false },
   estudiante_id: { type: DataTypes.INTEGER, allowNull: false },
   parentesco: { type: DataTypes.STRING(50), allowNull: true }
-}, {
-  tableName: 'padre_estudiante',
-  timestamps: false
-});
+}, { tableName: 'padres_estudiantes', timestamps: false });
+
+
+PadreEstudiante.belongsTo(User, { as: 'padreUser', foreignKey: 'padre_id' });
+PadreEstudiante.belongsTo(User, { as: 'estudianteUser', foreignKey: 'estudiante_id' });
+
+
+// Relaciones desde User hacia la tabla puente (hasMany / hasOne)
+User.hasMany(PadreEstudiante, { as: 'vinculosComoPadre', foreignKey: 'padre_id' });
+User.hasMany(PadreEstudiante, { as: 'vinculosComoEstudiante', foreignKey: 'estudiante_id' });
+
+// Relaciones N:M autoref (opcional, si las usas en includes)
+User.belongsToMany(User, { as: 'hijos', through: PadreEstudiante, foreignKey: 'padre_id', otherKey: 'estudiante_id' });
+User.belongsToMany(User, { as: 'padres', through: PadreEstudiante, foreignKey: 'estudiante_id', otherKey: 'padre_id' });
+
 
 const AsistenciaArchivo = sequelize.define('AsistenciaArchivo', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -269,16 +285,17 @@ const ReporteCurso = sequelize.define('ReporteCurso', {
 const Excusa = sequelize.define('Excusa', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   estudiante_id: { type: DataTypes.INTEGER, allowNull: false },
-  fecha: { type: DataTypes.DATEONLY, allowNull: false },
-  motivo: { type: DataTypes.TEXT, allowNull: true },
-  ruta_archivo: { type: DataTypes.STRING(255), allowNull: true },
-  estado: { type: DataTypes.ENUM('pendiente', 'aprobada', 'desaprobada'), allowNull: false, defaultValue: 'pendiente' }
-}, {
-  tableName: 'excusas',
-  timestamps: true,
-  createdAt: 'created_at',
-  updatedAt: 'updated_at'
-});
+  curso_id: { type: DataTypes.INTEGER, allowNull: false },
+  materia_id: { type: DataTypes.INTEGER, allowNull: true },
+  fecha_inicio: { type: DataTypes.DATEONLY, allowNull: false },
+  fecha_fin: { type: DataTypes.DATEONLY, allowNull: false },
+  motivo: { type: DataTypes.TEXT, allowNull: false },
+  archivo_justificacion: { type: DataTypes.STRING(255), allowNull: true },
+  estado: { type: DataTypes.ENUM('pendiente','aprobada','rechazada'), allowNull: false, defaultValue: 'pendiente' },
+  observaciones: { type: DataTypes.TEXT, allowNull: true },
+  creado_por: { type: DataTypes.INTEGER, allowNull: false }
+}, { tableName: 'excusas', timestamps: true, createdAt: 'created_at', updatedAt: 'updated_at' });
+
 
 /* ============================================================
    NOTIFICACIONES
@@ -327,8 +344,24 @@ const Horario = sequelize.define('Horario', {
 /* ============================================================
    RELACIONES
 ============================================================ */
-
+Asistencia.belongsTo(User, { as: 'estudiante', foreignKey: 'estudiante_id' });
+Asistencia.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+Asistencia.belongsTo(Materia, { as: 'materia', foreignKey: 'materia_id' });
 Asistencia.belongsTo(User, { as: 'registrador', foreignKey: 'registrado_por' });
+
+PadreEstudiante.belongsTo(User, { as: 'padre', foreignKey: 'padre_id' });
+PadreEstudiante.belongsTo(User, { as: 'estudiante', foreignKey: 'estudiante_id' });
+User.hasMany(PadreEstudiante, { as: 'hijosRel', foreignKey: 'padre_id' });
+User.hasOne(PadreEstudiante, { as: 'padreRel', foreignKey: 'estudiante_id' });
+
+Materia.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+Curso.hasMany(Materia, { as: 'materias', foreignKey: 'curso_id' });
+
+
+Excusa.belongsTo(User, { as: 'estudiante', foreignKey: 'estudiante_id' });
+Excusa.belongsTo(User, { as: 'solicitante', foreignKey: 'creado_por' });
+Excusa.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
+Excusa.belongsTo(Materia, { as: 'materia', foreignKey: 'materia_id' });
 
 
 // Asociaciones (añadir al bloque de relaciones, con guardas)
@@ -499,6 +532,7 @@ if (!User.associations || !User.associations.notificaciones) {
 }
 
 Notificacion.belongsTo(User, { as: 'remitente', foreignKey: 'enviado_por' });
+Notificacion.belongsTo(User, { as: 'destinatario', foreignKey: 'usuario_id' });
 
 Evento.belongsTo(Curso, { as: 'curso', foreignKey: 'curso_id' });
 

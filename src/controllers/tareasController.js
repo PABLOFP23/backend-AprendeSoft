@@ -66,31 +66,28 @@ exports.crearTarea = async (req, res) => {
 exports.listarTareasCurso = async (req, res) => {
   try {
     const { curso_id } = req.params;
-    // leer posible filtro de estudiante desde query
     const estudiante_id = req.query.estudiante_id ? Number(req.query.estudiante_id) : undefined;
     const { materia_id } = req.query;
 
     const where = { curso_id };
-    if (materia_id !== undefined) where.materia_id = materia_id;
+    if (materia_id !== undefined) where.materia_id = materia_id || null;
 
-    // Permisos: profesor dueño del curso o admin
     const perm = await assertCursoDelProfesor(curso_id, req.user);
-    if (perm.ok === false) return res.status(perm.code || 403).json({ error: perm.msg });
+    if (perm.ok === false) return res.status(perm.code).json({ error: perm.msg });
 
-    // Construir include de entregas dependiendo de si se filtró estudiante_id
     const entregasInclude = estudiante_id
       ? {
           model: TareaEstudiante,
           as: 'entregas',
           where: { estudiante_id },
           required: false,
-          attributes: ['id', 'imagen_ruta', 'archivo_ruta', 'created_at', 'updated_at']
+          attributes: ['id','imagen_ruta','archivo_ruta','comentario','nota','comentario_profesor','created_at','updated_at']
         }
       : {
           model: TareaEstudiante,
           as: 'entregas',
           required: false,
-          attributes: ['id', 'imagen_ruta', 'archivo_ruta', 'created_at', 'updated_at']
+          attributes: ['id','imagen_ruta','archivo_ruta','comentario','nota','comentario_profesor','created_at','updated_at']
         };
 
     const tareas = await Tarea.findAll({
@@ -182,60 +179,45 @@ exports.entregarTarea = async (req, res) => {
   try {
     const estudiante_id = req.user.id;
     const tarea_id = req.body.tarea_id ? Number(req.body.tarea_id) : null;
-    if (!tarea_id) {
-      await tx.rollback();
-      return res.status(400).json({ error: 'tarea_id requerido' });
-    }
+    if (!tarea_id) return res.status(400).json({ error: 'tarea_id es requerido' });
 
-    // validar existencia de tarea y que el estudiante pertenece al curso
-    const tarea = await Tarea.findByPk(tarea_id);
+    const tarea = await Tarea.findByPk(tarea_id, { transaction: tx });
     if (!tarea) {
       await tx.rollback();
       return res.status(404).json({ error: 'Tarea no encontrada' });
     }
-    // opcional: validar matricula
-    const matricula = await Matricula.findOne({ where: { curso_id: tarea.curso_id, estudiante_id } });
-    if (!matricula) {
-      await tx.rollback();
-      return res.status(403).json({ error: 'No matriculado en el curso de la tarea' });
-    }
 
-    // preparar rutas desde multer
-    const archivo = req.file ? req.file.filename : null;
-    const archivo_ruta = req.file ? `/uploads/tareas/${req.file.filename}` : null;
-
-    const curso_id = tarea.curso_id || null;
-
-
-    // crear o actualizar entrega
-    const [entrega, created] = await TareaEstudiante.findOrCreate({
-      where: { tarea_id, estudiante_id },
-      defaults: {
-        tarea_id,
-        estudiante_id,
-        curso_id,
-        archivo_ruta,
-        imagen_ruta: null,
-        comentario: req.body.comentario || null
-      },
+    // Validar que el estudiante pertenece al curso de la tarea
+    const mat = await Matricula.findOne({
+      where: { curso_id: tarea.curso_id, estudiante_id, estado: 'activo' },
       transaction: tx
     });
-
-    if (!created) {
-      // si ya existe, actualizar campos (archivo nuevo reemplaza)
-      await entrega.update({
-        archivo_ruta: archivo_ruta || entrega.archivo_ruta,
-        comentario: req.body.comentario !== undefined ? req.body.comentario : entrega.comentario,
-        updated_at: new Date()
-      }, { transaction: tx });
+    if (!mat) {
+      await tx.rollback();
+      return res.status(403).json({ error: 'No estás matriculado en el curso de esta tarea' });
     }
 
+    // Archivos (multer en la ruta guarda req.file)
+    const archivo_ruta = req.file ? `/uploads/tareas/${req.file.filename}` : (req.body.archivo_ruta || null);
+    const imagen_ruta = req.body.imagen_ruta ? String(req.body.imagen_ruta) : null;
+    const comentario = req.body.comentario ? String(req.body.comentario).slice(0, 1000) : null;
+
+    const entrega = await TareaEstudiante.create({
+      tarea_id,
+      estudiante_id,
+      curso_id: tarea.curso_id,
+      materia_id: tarea.materia_id || null,
+      imagen_ruta,
+      archivo_ruta,
+      comentario
+    }, { transaction: tx });
+
     await tx.commit();
-    return res.status(created ? 201 : 200).json({ message: 'Entrega registrada', entrega });
+    return res.status(201).json({ message: 'Entrega registrada', entrega });
   } catch (err) {
     await tx.rollback();
-    console.error('entregarTarea error:', err);
-    return res.status(500).json({ error: 'Error al procesar entrega' });
+    console.error('entregarTarea:', err);
+    return res.status(500).json({ error: 'Error al entregar tarea' });
   }
 };
 
@@ -243,37 +225,32 @@ exports.entregarTarea = async (req, res) => {
 exports.actualizarEntrega = async (req, res) => {
   const tx = await sequelize.transaction();
   try {
-    if (req.user.rol !== 'estudiante') {
-      await tx.rollback();
-      return res.status(403).json({ error: 'Solo estudiantes pueden actualizar sus entregas' });
-    }
-    const { entrega_id } = req.params;
-    const { imagen_ruta, archivo_ruta } = req.body;
-    if (!imagen_ruta && !archivo_ruta) {
-      await tx.rollback();
-      return res.status(400).json({ error: 'Debes enviar imagen_ruta o archivo_ruta' });
-    }
-
+    const entrega_id = Number(req.params.entrega_id);
     const entrega = await TareaEstudiante.findByPk(entrega_id, { transaction: tx });
-    if (!entrega || entrega.estudiante_id !== req.user.id) {
+    if (!entrega) {
       await tx.rollback();
       return res.status(404).json({ error: 'Entrega no encontrada' });
     }
+    if (entrega.estudiante_id !== req.user.id) {
+      await tx.rollback();
+      return res.status(403).json({ error: 'No puedes editar entregas de otro estudiante' });
+    }
 
-    await entrega.update(
-      {
-        imagen_ruta: imagen_ruta || entrega.imagen_ruta,
-        archivo_ruta: archivo_ruta || entrega.archivo_ruta
-      },
-      { transaction: tx }
-    );
+    const updates = {};
+    if (req.body.comentario !== undefined) {
+      updates.comentario = req.body.comentario ? String(req.body.comentario).slice(0, 1000) : null;
+    }
+    // Si quieres permitir reemplazar archivo vía PUT (sin multer), acepta una URL:
+    if (req.body.archivo_ruta !== undefined) updates.archivo_ruta = req.body.archivo_ruta || null;
+    if (req.body.imagen_ruta !== undefined) updates.imagen_ruta = req.body.imagen_ruta || null;
 
+    await entrega.update(updates, { transaction: tx });
     await tx.commit();
     return res.json({ message: 'Entrega actualizada', entrega });
   } catch (err) {
     await tx.rollback();
     console.error('actualizarEntrega:', err);
-    return res.status(500).json({ error: 'Error al actualizar la entrega' });
+    return res.status(500).json({ error: 'Error al actualizar entrega' });
   }
 };
 
@@ -369,33 +346,31 @@ exports.listarEntregasDeTarea = async (req, res) => {
 exports.calificarEntrega = async (req, res) => {
   const tx = await sequelize.transaction();
   try {
-    const entregaId = Number(req.params.entrega_id);
-    const { nota, comentario_profesor } = req.body;
-    if (!entregaId) { await tx.rollback(); return res.status(400).json({ error: 'entrega_id requerido' }); }
-
-    const entrega = await TareaEstudiante.findByPk(entregaId, { transaction: tx });
-    if (!entrega) { await tx.rollback(); return res.status(404).json({ error: 'Entrega no encontrada' }); }
-
-    // permisos: admin o profesor del curso al que pertenece la tarea/entrega
-    const tarea = await Tarea.findByPk(entrega.tarea_id);
-    if (!tarea) { await tx.rollback(); return res.status(404).json({ error: 'Tarea relacionada no encontrada' }); }
-    if (req.user.rol !== 'admin') {
-      const curso = await Curso.findByPk(tarea.curso_id);
-      if (!curso || curso.profesor_id !== req.user.id) { await tx.rollback(); return res.status(403).json({ error: 'Sin permisos para calificar' }); }
+    const entrega_id = Number(req.params.entrega_id);
+    const entrega = await TareaEstudiante.findByPk(entrega_id, { transaction: tx });
+    if (!entrega) {
+      await tx.rollback();
+      return res.status(404).json({ error: 'Entrega no encontrada' });
     }
 
-    await entrega.update({
-      nota: nota !== undefined ? Number(nota) : entrega.nota,
-      comentario_profesor: comentario_profesor !== undefined ? comentario_profesor : entrega.comentario_profesor,
-      calificado_por: req.user.id,
-      calificado_at: new Date()
-    }, { transaction: tx });
+    // Permisos: admin o profesor dueño del curso
+    const perm = await assertCursoDelProfesor(entrega.curso_id, req.user);
+    if (perm.ok === false) {
+      await tx.rollback();
+      return res.status(perm.code).json({ error: perm.msg });
+    }
 
+    const { nota, comentario_profesor } = req.body;
+    const updates = {};
+    if (nota !== undefined) updates.nota = nota === null ? null : Number(nota);
+    if (comentario_profesor !== undefined) updates.comentario_profesor = comentario_profesor ? String(comentario_profesor).slice(0, 1000) : null;
+
+    await entrega.update(updates, { transaction: tx });
     await tx.commit();
     return res.json({ message: 'Entrega calificada', entrega });
   } catch (err) {
     await tx.rollback();
-    console.error('calificarEntrega error:', err);
+    console.error('calificarEntrega:', err);
     return res.status(500).json({ error: 'Error al calificar entrega' });
   }
 };

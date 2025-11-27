@@ -34,6 +34,19 @@ router.post(
   asistenciaController.tomarAsistencia
 );
 
+router.get(
+  '/materias/mias',
+  authorizeRoles('profesor','admin'),
+  (req, res) => require('../controllers/asistenciaController').misMaterias(req, res)
+);
+
+// Roster por materia y fecha (profesor/admin)
+router.get(
+  '/materia/:materia_id/fecha/:fecha',
+  authorizeRoles('profesor','admin'),
+  (req, res) => require('../controllers/asistenciaController').obtenerAsistenciaPorMateriaFecha(req, res)
+);
+
 // Actualizar asistencia individual (profesores y admin)
 router.put(
   '/:id',
@@ -146,11 +159,12 @@ router.get(
           {
             model: User,
             as: 'estudiante',
-            attributes: ['nombre', 'apellido']
+            attributes: ['id','nombre','apellido1','apellido2','email']
           },
           {
             model: Curso,
-            attributes: ['nombre', 'grado', 'seccion']
+            as: 'curso', // <- alias correcto
+            attributes: ['id','nombre','grado','grupo'] // 'grupo' en vez de 'seccion'
           }
         ]
       });
@@ -184,6 +198,27 @@ router.post(
   authorizeRoles('estudiante','padre'),
   upload.single('archivo_justificacion'),
   asistenciaController.solicitarJustificacion
+);
+
+router.post(
+  '/excusas',
+  authorizeRoles('padre','estudiante','profesor','admin'),
+  upload.single('archivo_justificacion'),
+  asistenciaController.crearExcusa
+);
+
+// Listar excusas (scope por rol, filtros)
+router.get(
+  '/excusas',
+  authorizeRoles('padre','estudiante','profesor','admin'),
+  asistenciaController.listarExcusas
+);
+
+// Cambiar estado (aprobar/rechazar) — solo profesor/admin
+router.put(
+  '/excusas/:id/estado',
+  authorizeRoles('profesor','admin'),
+  asistenciaController.cambiarEstadoExcusa
 );
 
 module.exports = router;

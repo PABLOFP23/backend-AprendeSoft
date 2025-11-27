@@ -58,7 +58,16 @@ exports.adminUpdateUser = async (req, res) => {
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const { activo, nombre, telefono, direccion } = req.body;
+        if (numero_identificacion !== undefined) {
+      const ni = String(numero_identificacion).trim() || null;
+      if (ni) {
+        const existeNI = await User.findOne({ where: { numero_identificacion: ni, id: { [Op.ne]: user.id } } });
+        if (existeNI) return res.status(409).json({ error: 'numero_identificacion ya en uso' });
+      }
+      updates.numero_identificacion = ni;
+    }
+
+    const { activo, nombre, telefono, direccion, numero_identificacion } = req.body;
     const updates = {};
     if (activo !== undefined) updates.activo = activo;
     if (nombre !== undefined) updates.nombre = nombre;
@@ -70,5 +79,19 @@ exports.adminUpdateUser = async (req, res) => {
   } catch (err) {
     console.error('usersController.adminUpdateUser error:', err);
     return res.status(500).json({ error: 'Error al actualizar usuario' });
+  }
+};
+
+exports.adminDeleteUser = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id inválido' });
+    const user = await User.findByPk(id);
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    await user.destroy();
+    return res.json({ message: 'Usuario eliminado' });
+  } catch (err) {
+    console.error('usersController.adminDeleteUser error:', err);
+    return res.status(500).json({ error: 'Error al eliminar usuario' });
   }
 };

@@ -16,4 +16,6 @@ router.post('/curso', authorizeRoles('admin','profesor'), reportesController.cre
 router.get('/curso', authorizeRoles('admin','profesor'), reportesController.listarReportesCurso);
 router.put('/curso/:id', authorizeRoles('admin','profesor'), reportesController.editarReporteCurso);
 
+router.get('/curso/:curso_id/rendimiento', authorizeRoles('admin','profesor'), reportesController.rendimientoCurso);
+
 module.exports = router;

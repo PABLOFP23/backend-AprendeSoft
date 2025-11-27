@@ -155,7 +155,8 @@ exports.adminCreateUser = async (req, res) => {
       fecha_nacimiento,
       direccion,
       password,
-      rol
+      rol,
+      numero_identificacion
     } = req.body;
 
     const allowedRoles = ['admin', 'profesor', 'estudiante', 'padre'];
@@ -167,6 +168,17 @@ exports.adminCreateUser = async (req, res) => {
       return res.status(400).json({
         error: 'nombre, apellido1, telefono, fecha_nacimiento, direccion y password son obligatorios'
       });
+    }
+
+        let numeroIdent = null;
+    if (numero_identificacion) {
+      const ni = String(numero_identificacion).trim();
+      if (!/^[0-9A-Za-z\-_.]{4,20}$/.test(ni)) {
+        return res.status(400).json({ error: 'numero_identificacion inválido' });
+      }
+      const existeNI = await User.findOne({ where: { numero_identificacion: ni } });
+      if (existeNI) return res.status(409).json({ error: 'numero_identificacion ya existe' });
+      numeroIdent = ni;
     }
 
     const telLimpio = String(telefono).trim();
@@ -228,7 +240,8 @@ exports.adminCreateUser = async (req, res) => {
       telefono: telLimpio,
       direccion,
       fecha_nacimiento,
-      foto
+      foto,
+      numero_identificacion: numeroIdent
     });
 
     return res.status(201).json({

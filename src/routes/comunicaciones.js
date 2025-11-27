@@ -11,5 +11,6 @@ router.post('/enviar', authorizeRoles('profesor','admin'), ctrl.enviarComunicaci
 
 router.get('/', ctrl.listarRecibidas);
 
+router.get('/enviadas', authorizeRoles('profesor','admin'), ctrl.listarEnviadas);
 
 module.exports = router;

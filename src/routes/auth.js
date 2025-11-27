@@ -44,6 +44,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
+
 // Crear usuario con rol (solo admin)
 router.post('/admin/usuarios', authMiddleware, authorizeRoles('admin'), adminCreateUser);
 
@@ -51,6 +52,8 @@ router.post('/admin/usuarios', authMiddleware, authorizeRoles('admin'), adminCre
 router.get('/admin/usuarios', authMiddleware, authorizeRoles('admin'), usersController.listUsers);
 
 router.put('/admin/usuarios/:id', authMiddleware, authorizeRoles('admin'), usersController.adminUpdateUser);
+
+router.delete('/admin/usuarios/:id', usersController.adminDeleteUser);
 
 
 module.exports = router;

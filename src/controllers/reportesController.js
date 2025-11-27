@@ -1,6 +1,101 @@
 const { ReporteEstudiante, ReporteCurso, User, Curso, Materia } = require('../models');
 const { Op } = require('sequelize');
 
+// Umbrales (ajusta según tu escala)
+const THRESHOLDS = {
+  bueno: 80,
+  regular: 60
+};
+function clasificarPromedio(v) {
+  if (v === null || isNaN(v)) return 'malo';
+  if (v >= THRESHOLDS.bueno) return 'bueno';
+  if (v >= THRESHOLDS.regular) return 'regular';
+  return 'malo';
+}
+
+// Rendimiento curso agregado
+exports.rendimientoCurso = async (req, res) => {
+  try {
+    const curso_id = Number(req.params.curso_id);
+    if (!curso_id) return res.status(400).json({ error: 'curso_id inválido' });
+
+    const curso = await Curso.findByPk(curso_id);
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (req.user.rol === 'profesor' && curso.profesor_id !== req.user.id)
+      return res.status(403).json({ error: 'Sin permisos sobre este curso' });
+
+    // Traer todos los reportes estudiante (boletines) del curso
+    const reportes = await ReporteEstudiante.findAll({
+      where: { curso_id },
+      include: [
+        { model: User, as: 'estudiante', attributes: ['id','nombre','apellido1'] },
+        { model: Materia, as: 'materia', attributes: ['id','nombre'] }
+      ]
+    });
+
+    // Agrupar notas por estudiante y por materia
+    const estMap = new Map();
+    const matMap = new Map();
+    reportes.forEach(r => {
+      const nota = r.nota == null ? null : Number(r.nota);
+      if (nota != null && !isNaN(nota)) {
+        // estudiante
+        const eid = r.estudiante_id;
+        if (!estMap.has(eid)) estMap.set(eid, { sum:0, count:0, estudiante: r.estudiante });
+        const eObj = estMap.get(eid);
+        eObj.sum += nota; eObj.count += 1;
+
+        // materia
+        const mid = r.materia_id;
+        if (!matMap.has(mid)) matMap.set(mid, { sum:0, count:0, materia: r.materia });
+        const mObj = matMap.get(mid);
+        mObj.sum += nota; mObj.count += 1;
+      }
+    });
+
+    const estudiantes = Array.from(estMap.values()).map(e => {
+      const prom = e.count ? +(e.sum / e.count).toFixed(2) : null;
+      return {
+        estudiante_id: e.estudiante.id,
+        nombre: `${e.estudiante.nombre} ${e.estudiante.apellido1 || ''}`.trim(),
+        promedio: prom,
+        estado: clasificarPromedio(prom)
+      };
+    }).sort((a,b)=> (b.promedio??0) - (a.promedio??0));
+
+    const materias = Array.from(matMap.values()).map(m => {
+      const prom = m.count ? +(m.sum / m.count).toFixed(2) : null;
+      return {
+        materia_id: m.materia.id,
+        nombre: m.materia.nombre,
+        promedio: prom,
+        estado: clasificarPromedio(prom)
+      };
+    }).sort((a,b)=> (b.promedio??0) - (a.promedio??0));
+
+    // Promedio general (sobre todas las notas consolidadas)
+    let globalSum = 0, globalCount = 0;
+    reportes.forEach(r => {
+      const nota = r.nota == null ? null : Number(r.nota);
+      if (nota != null && !isNaN(nota)) { globalSum += nota; globalCount++; }
+    });
+    const promedio_general = globalCount ? +(globalSum / globalCount).toFixed(2) : null;
+    const estado_general = clasificarPromedio(promedio_general);
+
+    return res.json({
+      curso: { id: curso.id, nombre: curso.nombre, grado: curso.grado, grupo: curso.grupo },
+      promedio_general,
+      estado_general,
+      estudiantes,
+      materias,
+      total_notas: globalCount
+    });
+  } catch (e) {
+    console.error('rendimientoCurso:', e);
+    return res.status(500).json({ error: 'Error al calcular rendimiento del curso' });
+  }
+};
+
 // ===================== REPORTES ESTUDIANTE =====================
 
 exports.crearReporteEstudiante = async (req, res) => {
@@ -46,31 +141,44 @@ exports.listarReportesEstudiante = async (req, res) => {
     const { curso_id, materia_id, estudiante_id, estado_rendimiento, min_nota, max_nota } = req.query;
     const where = {};
     if (curso_id) where.curso_id = curso_id;
-    if (materia_id) where.materia_id = materia_id;
+    if (materia_id !== undefined) where.materia_id = materia_id;
     if (estudiante_id) where.estudiante_id = estudiante_id;
     if (estado_rendimiento) where.estado_rendimiento = estado_rendimiento;
     if (min_nota || max_nota) {
       where.nota = {};
-      if (min_nota) where.nota[Op.gte] = min_nota;
-      if (max_nota) where.nota[Op.lte] = max_nota;
+      if (min_nota) where.nota[Op.gte] = Number(min_nota);
+      if (max_nota) where.nota[Op.lte] = Number(max_nota);
     }
-
-    // Permisos básicos: admin o profesor ve todo; estudiante solo los suyos
     if (req.user.rol === 'estudiante') {
       where.estudiante_id = req.user.id;
     }
 
-    const reportes = await ReporteEstudiante.findAll({
+    const list = await ReporteEstudiante.findAll({
       where,
       include: [
-        { model: User, as: 'estudiante', attributes: ['id','nombre','apellido1','apellido2','email'] },
+        { model: User, as: 'estudiante', attributes: ['id','nombre','apellido1','email'] },
         { model: Curso, as: 'curso', attributes: ['id','nombre','grado','grupo'] },
-        { model: Materia, as: 'materia', attributes: ['id','nombre','codigo'] }
+        { model: Materia, as: 'materia', attributes: ['id','nombre'] }
       ],
       order: [['updated_at','DESC']]
     });
 
-    return res.json(reportes);
+    // opcional: devolver resumen por estudiante (promedio)
+    const resumen = {};
+    list.forEach(r => {
+      const key = r.estudiante_id;
+      const nota = typeof r.nota === 'number' ? r.nota : null;
+      if (!resumen[key]) resumen[key] = { count: 0, sum: 0, notas: 0 };
+      if (nota !== null) { resumen[key].sum += nota; resumen[key].notas += 1; }
+      resumen[key].count += 1;
+    });
+
+    return res.json(list.map(r => ({
+      ...r.toJSON(),
+      promedio_estudiante: (resumen[r.estudiante_id]?.notas
+        ? (resumen[r.estudiante_id].sum / resumen[r.estudiante_id].notas).toFixed(2)
+        : null)
+    })));
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Error al listar reportes de estudiante' });
