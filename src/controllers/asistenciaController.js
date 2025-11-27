@@ -119,17 +119,18 @@ exports.obtenerAsistenciaPorFecha = async (req, res) => {
     const { curso_id, fecha } = req.params;
     const registros = await Asistencia.findAll({
       where: { curso_id, fecha },
-      include: [{
-        model: User,
-        as: 'estudiante',
-        attributes: ['id','nombre','apellido1','apellido2','email']
-      },
+      include: [
+        {
+          model: User,
+          as: 'estudiante',
+          attributes: ['id','nombre','apellido1','apellido2','email','telefono','fecha_nacimiento','direccion','numero_identificacion']
+        },
         {
           model: User,
           as: 'registrador',
           attributes: ['id','nombre','apellido1','rol','email']
         }
-    ],
+      ],
       order: [[{ model: User, as: 'estudiante' }, 'apellido1', 'ASC'], [{ model: User, as: 'estudiante' }, 'nombre', 'ASC']]
     });
     return res.json(registros);
