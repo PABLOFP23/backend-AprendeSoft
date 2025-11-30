@@ -159,6 +159,8 @@ exports.adminCreateUser = async (req, res) => {
       numero_identificacion
     } = req.body;
 
+    
+
     const allowedRoles = ['admin', 'profesor', 'estudiante', 'padre'];
     if (!allowedRoles.includes(rol)) {
       return res.status(400).json({ error: 'Rol inválido' });
@@ -181,7 +183,15 @@ exports.adminCreateUser = async (req, res) => {
       numeroIdent = ni;
     }
 
+        if (numero_identificacion) {
+      const ni = String(numero_identificacion).trim();
+      const existsNI = await User.findOne({ where: { numero_identificacion: ni } });
+      if (existsNI) return res.status(409).json({ error: 'numero_identificacion ya está registrado' });
+    }
+
     const telLimpio = String(telefono).trim();
+        const existsTel = await User.findOne({ where: { telefono: telLimpio } });
+    if (existsTel) return res.status(409).json({ error: 'telefono ya está registrado' });
     if (!/^[0-9+\-\s]{7,20}$/.test(telLimpio)) {
       return res.status(400).json({ error: 'Teléfono inválido' });
     }
@@ -262,7 +272,11 @@ exports.adminCreateUser = async (req, res) => {
         activo: user.activo
       }
     });
+
+    
+
   } catch (err) {
+
     console.error('adminCreateUser error:', err);
     return res.status(500).json({ error: 'Error al crear usuario desde admin' });
   }
@@ -273,30 +287,23 @@ exports.adminCreateUser = async (req, res) => {
 // ======================
 exports.login = async (req, res) => {
   try {
-    const { username, password } = req.body; 
-    const user = await User.findOne({ where: { username } });
-
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) return res.status(401).json({ error: 'Credenciales inválidas' });
-
-    const token = jwt.sign(
-      { id: user.id, username: user.username, rol: user.rol }, 
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' } 
-    );
-
-    res.json({
-      message: 'Login exitoso',
-      token,
-      user: { 
-        id: user.id, 
-        username: user.username, 
-        rol: user.rol
-      }
+    const { username, password } = req.body;
+    const user = await User.findOne({
+      where: { [require('sequelize').Op.or]: [{ username }, { email: username }] }
     });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (user.activo === false) return res.status(403).json({ error: 'Cuenta desactivada' });
+
+    const ok = await require('bcryptjs').compare(password, user.password);
+    if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+    const token = require('jsonwebtoken').sign(
+      { id: user.id, rol: user.rol, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+    return res.json({ token, user: { id:user.id, rol:user.rol, username:user.username, nombre:user.nombre } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Error de autenticación' });
   }
 };

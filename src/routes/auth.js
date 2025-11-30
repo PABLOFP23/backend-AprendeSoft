@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { register, login, adminCreateUser } = require('../controllers/authController');
-const usersController = require('../controllers/usersController'); // <-- nuevo
+const usersController = require('../controllers/usersController'); 
 const authorizeRoles = require('../middleware/roleMiddleware');
 const authMiddleware = require('../middleware/authMiddleware');
 const { User } = require('../models/index');
+
 
 // Registro de usuario
 router.post('/register', register);
@@ -54,6 +55,10 @@ router.get('/admin/usuarios', authMiddleware, authorizeRoles('admin'), usersCont
 router.put('/admin/usuarios/:id', authMiddleware, authorizeRoles('admin'), usersController.adminUpdateUser);
 
 router.delete('/admin/usuarios/:id', usersController.adminDeleteUser);
+
+router.get('/admin/usuarios/unique', authorizeRoles('admin'), usersController.checkUnique);
+
+router.put('/admin/usuarios/:id/password', authMiddleware, authorizeRoles('admin'), usersController.adminSetPassword);
 
 
 module.exports = router;

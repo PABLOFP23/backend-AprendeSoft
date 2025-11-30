@@ -1,6 +1,7 @@
 'use strict';
 const { DataTypes } = require('sequelize');
 
+
 module.exports = {
   up: async (queryInterface) => {
     // Tabla usuarios (versión inicial con 'apellido' para que luego migre a apellido1/2)
